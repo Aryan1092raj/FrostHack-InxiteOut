@@ -1,0 +1,12 @@
+{
+    "executionEnvironments": [
+        {
+            "root": "backend",
+            "extraPaths": [
+                "backend"
+            ]
+        }
+    ],
+    "pythonPlatform": "Windows",
+    "pythonVersion": "3.12"
+}
