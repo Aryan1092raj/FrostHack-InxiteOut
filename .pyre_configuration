@@ -1,5 +1,9 @@
 {
   "source_directories": [
     "backend"
+  ],
+  "search_path": [
+    "C:\\Users\\aryan_vhhib36\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages",
+    "backend"
   ]
 }
