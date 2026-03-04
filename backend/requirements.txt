@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+langgraph
+langchain
+langchain-google-genai
+langchain-community
+sse-starlette
+pydantic
+python-dotenv
+aiohttp
+requests
