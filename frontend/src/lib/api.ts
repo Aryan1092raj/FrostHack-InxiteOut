@@ -1,4 +1,4 @@
-import { MOCK_CAMPAIGNS } from "./mockData"
+
 
 // =====================================================
 // IMPORTANT: This file is the ONLY place that talks
@@ -14,85 +14,69 @@ const BASE_URL = "http://localhost:8000"
 // Get all campaigns
 // ---------------------------
 export const getCampaigns = async () => {
-  // Mock version — returns fake data immediately
-  return MOCK_CAMPAIGNS
-
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaigns`)
-  // return res.json()
+  const res = await fetch(`${BASE_URL}/api/campaigns`)
+  const data = await res.json()
+  return data.campaigns.map((c: any) => ({
+    ...c,
+    metrics: c.metrics || { open_rate: 0, click_rate: 0, total_sent: 0 }
+  }))
 }
 
 // ---------------------------
 // Get one campaign by its ID
 // ---------------------------
 export const getCampaign = async (id: string) => {
-  // Mock version — finds the campaign with matching id
-  const found = MOCK_CAMPAIGNS.find(c => c.id === id)
-  return found || MOCK_CAMPAIGNS[0]  // fallback to first if not found
-
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaign/${id}`)
-  // return res.json()
+  const res = await fetch(`${BASE_URL}/api/campaign/${id}`)
+  return res.json()
 }
 
 // ---------------------------
 // Start a new campaign
 // ---------------------------
 export const startCampaign = async (brief: string) => {
-  // Mock version — pretends a campaign was created and returns an ID
-  console.log("Brief received:", brief)
-  return { id: "uuid-001" }
-
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaign/start`, {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ brief })
-  // })
-  // return res.json()
+  const res = await fetch(`${BASE_URL}/api/campaign/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ brief })
+  })
+  return res.json()
 }
 
 // ---------------------------
 // Approve a campaign
 // ---------------------------
 export const approveCampaign = async (id: string) => {
-  // Mock version — pretends approval was sent
-  console.log("Campaign approved:", id)
-  return { success: true }
-
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaign/${id}/approve`, {
-  //   method: "POST"
-  // })
-  // return res.json()
+  const res = await fetch(`${BASE_URL}/api/campaign/${id}/approve`, {
+    method: "POST"
+  })
+  return res.json()
 }
 
 // ---------------------------
 // Reject a campaign with feedback
 // ---------------------------
 export const rejectCampaign = async (id: string, note: string) => {
-  // Mock version — pretends rejection was sent
-  console.log("Campaign rejected:", id, "| Reason:", note)
-  return { success: true, note }
-
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaign/${id}/reject`, {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ note })
-  // })
-  // return res.json()
+  const res = await fetch(`${BASE_URL}/api/campaign/${id}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: note })
+  })
+  return res.json()
 }
 
 // ---------------------------
 // Get performance report
 // ---------------------------
 export const getCampaignReport = async (id: string) => {
-  // Mock version — returns the metrics of the matching campaign
-  const found = MOCK_CAMPAIGNS.find(c => c.id === id)
-  return found ? found.metrics : MOCK_CAMPAIGNS[0].metrics
+  const res = await fetch(`${BASE_URL}/api/campaign/${id}/report`)
+  return res.json()
+}
 
-  // DAY 6 — swap to this:
-  // const res = await fetch(`${BASE_URL}/api/campaign/${id}/report`)
-  // return res.json()
+// ---------------------------
+// Get report history (for charts)
+// ---------------------------
+export const getCampaignReports = async (id: string) => {
+  const res = await fetch(`${BASE_URL}/api/campaign/${id}/reports`)
+  const data = await res.json()
+  return data.reports
 }

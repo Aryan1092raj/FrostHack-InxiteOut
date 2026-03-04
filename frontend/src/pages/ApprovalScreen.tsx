@@ -37,14 +37,14 @@ export default function ApprovalScreen() {
       <p className="text-gray-500 text-sm mb-6">Review the AI-generated campaign below. Approve to schedule it, or reject with feedback.</p>
 
       {/* Email previews */}
-      {campaign.emails.map((email: any, i: number) => (
+      {(campaign.emails || []).map((email: any, i: number) => (
         <div key={i} className="bg-white rounded-xl shadow-sm p-5 mb-4 border-l-4 border-purple-400">
           <div className="flex justify-between items-center mb-3">
             <span className="text-xs font-bold bg-purple-100 text-purple-700 px-3 py-1 rounded-full">
               {email.variant.replace("_", " ").toUpperCase()}
             </span>
             <span className="text-xs text-gray-400">
-              → {email.customer_ids.length} customers · Sends at: {campaign.strategy.send_times[i] || campaign.strategy.send_times[0]}
+              → {email.customer_ids.length} customers · Sends at: {campaign.strategy?.send_times?.[i] || campaign.strategy?.send_times?.[0] || "TBD"}
             </span>
           </div>
           <p className="font-semibold text-gray-800 mb-2">Subject: {email.subject}</p>
@@ -55,12 +55,14 @@ export default function ApprovalScreen() {
       ))}
 
       {/* Summary box */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6 text-sm text-blue-800">
-        <p className="font-semibold mb-1">Campaign Summary</p>
-        <p>Total segments: {campaign.strategy.segments.length}</p>
-        <p>A/B variants: {campaign.strategy.ab_variants.length}</p>
-        <p>Total customers targeted: {campaign.strategy.segments.flat().length}</p>
-      </div>
+      {campaign.strategy && (
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6 text-sm text-blue-800">
+          <p className="font-semibold mb-1">Campaign Summary</p>
+          <p>Total segments: {campaign.strategy.segments?.length || 0}</p>
+          <p>A/B variants: {campaign.strategy.ab_variants?.length || 0}</p>
+          <p>Total customers targeted: {campaign.strategy.segments?.flat().length || 0}</p>
+        </div>
+      )}
 
       {/* Action buttons */}
       {!showRejectBox ? (

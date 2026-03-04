@@ -38,45 +38,28 @@ export default function NewCampaign() {
     setApprovalReady(false)
 
     const result = await startCampaign(brief)
-    setCampaignId(result.id)
+    setCampaignId(result.campaign_id)
     setLoading(false)
 
-    // WEEK 1: Simulate agent thinking with fake events
-    // DAY 6: Replace this block with real SSE (see comment below)
-    const mockStream: AgentEvent[] = [
-      { type: "agent_thought", agent: "profiler", message: "Fetching customer cohort from CampaignX API..." },
-      { type: "agent_thought", agent: "profiler", message: "5000 customers found. Analyzing demographics — age, gender, location, activity status..." },
-      { type: "agent_thought", agent: "profiler", message: "Segments identified: Young Urban (35%), Female Seniors (12%), Inactive (28%), Mid-age (25%)" },
-      { type: "agent_thought", agent: "strategist", message: "Designing A/B test strategy. Creating 2 variants targeting different tones..." },
-      { type: "agent_thought", agent: "strategist", message: "Optimal send time: 9am for working professionals, 6pm for seniors" },
-      { type: "agent_thought", agent: "content_gen", message: "Writing Variant A (formal tone) with financial focus..." },
-      { type: "agent_thought", agent: "content_gen", message: "Writing Variant B (friendly tone) with emoji and casual language..." },
-      { type: "agent_thought", agent: "content_gen", message: "Including XDeposit URL and special offer for female senior citizens as instructed..." },
-      { type: "approval_needed", agent: "executor", message: "✅ Campaign ready! Please review and approve before sending." },
-    ]
-
-    let i = 0
-    const interval = setInterval(() => {
-      if (i < mockStream.length) {
-        setEvents(prev => [...prev, mockStream[i]])
-        if (mockStream[i].type === "approval_needed") {
-          setApprovalReady(true)
-          clearInterval(interval)
-        }
-        i++
-      }
-    }, 1000) // one new thought every 1 second
-
     // ---- DAY 6 SSE replacement ----
-    // const es = new EventSource(`http://localhost:8000/api/campaign/${result.id}/stream`)
-    // es.onmessage = (e) => {
-    //   const event = JSON.parse(e.data)
-    //   setEvents(prev => [...prev, event])
-    //   if (event.type === "approval_needed") {
-    //     setApprovalReady(true)
-    //     es.close()
-    //   }
-    // }
+    const es = new EventSource(`http://localhost:8000/api/campaign/${result.campaign_id}/stream`)
+
+    es.onmessage = (e) => {
+      const event = JSON.parse(e.data)
+      setEvents((prev) => [...prev, event])
+
+      if (event.type === "approval_needed") {
+        setApprovalReady(true)
+        es.close()
+      } else if (event.type === "done" || event.type === "error") {
+        es.close()
+      }
+    }
+
+    es.onerror = (err) => {
+      console.error("SSE Error:", err)
+      es.close()
+    }
   }
 
   return (
