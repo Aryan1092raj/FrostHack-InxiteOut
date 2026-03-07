@@ -1,7 +1,7 @@
 import json
 import itertools
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 from db.database import get_cached_cohort, save_cohort_cache
 from tools.campaignx_tools import tool_get_customer_cohort
 
@@ -38,14 +38,14 @@ async def profiler_node(state: CampaignState) -> dict:
                "Analyzing demographics to build targeted segments...")
 
     llm = get_llm(temperature=0.3)
-    sample = list(itertools.islice(customers, 60)) if len(customers) > 60 else customers
+    sample = list(itertools.islice(customers, 20)) if len(customers) > 20 else customers
 
     prompt = f"""You are a customer analytics expert for SuperBFSI, an Indian BFSI company launching XDeposit term deposit product.
 
 Campaign Brief: {brief}
 
-Customer Data ({len(sample)} sample of {len(customers)} total):
-{json.dumps(sample, indent=2)}
+Customer Data (sample of {len(customers)} total customers):
+{json.dumps(sample)}
 
 Create 3-5 meaningful demographic segments from this data optimized for the XDeposit email campaign.
 
@@ -75,8 +75,8 @@ Return ONLY this JSON structure (no other text):
 Use ONLY real customer_ids from the data above. Cover ALL {len(customers)} customers across segments (no customer left out)."""
 
     try:
-        response = llm.invoke(prompt)
-        result = json.loads(clean_llm_json(response.content))
+        content = await invoke_with_retry(llm, prompt)
+        result = json.loads(clean_llm_json(content), strict=False)
         segments = result.get("segments", [])
         insights = result.get("insights", "")
 

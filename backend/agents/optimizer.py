@@ -1,6 +1,6 @@
 import json
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 from db.database import increment_campaign_iteration
 
 
@@ -69,8 +69,8 @@ Return ONLY this JSON:
 }}"""
 
     try:
-        response = llm.invoke(prompt)
-        result = json.loads(clean_llm_json(response.content))
+        content = await invoke_with_retry(llm, prompt)
+        result = json.loads(clean_llm_json(content), strict=False)
 
         should_continue = result.get("should_continue", True)
         notes = result.get("optimization_notes", "")

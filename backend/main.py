@@ -11,6 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from db.database import (
     init_db,
+    get_connection,
     create_campaign,
     get_campaign,
     get_all_campaigns,
@@ -40,7 +41,7 @@ app = FastAPI(title="CampaignX Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Frontend can be on any port during dev
+    allow_origins=["*"],  # will update to Vercel URL after deploy
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -194,6 +195,29 @@ async def get_campaign_report(campaign_id: str):
     if not report:
         raise HTTPException(404, f"No report found for campaign {campaign_id}")
     return report
+
+
+@app.get("/api/campaign/{campaign_id}/reports")
+async def get_campaign_reports_history(campaign_id: str):
+    """Returns all reports for a campaign — used by optimization timeline chart."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT * FROM reports WHERE campaign_id = ?
+        ORDER BY fetched_at ASC
+    """, (campaign_id,)).fetchall()
+    conn.close()
+
+    reports = []
+    for row in rows:
+        report = dict(row)
+        report["raw_report"] = json.loads(report["raw_report"]) if report["raw_report"] else {}
+        reports.append(report)
+
+    return {
+        "campaign_id": campaign_id,
+        "reports": reports,
+        "total": len(reports)
+    }
 
 
 @app.get("/api/campaign/{campaign_id}/logs")

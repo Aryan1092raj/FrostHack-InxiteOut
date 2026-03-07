@@ -1,6 +1,6 @@
 import json
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 XDEPOSIT_URL = "https://superbfsi.com/xdeposit/explore/"
 
@@ -83,8 +83,8 @@ Return ONLY this JSON:
 }}"""
 
         try:
-            response = llm.invoke(prompt)
-            content = json.loads(clean_llm_json(response.content))
+            raw = await invoke_with_retry(llm, prompt)
+            content = json.loads(clean_llm_json(raw), strict=False)
             subject = content.get("subject", "")
             body = content.get("body", "")
 

@@ -1,12 +1,13 @@
 import sqlite3
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 # ─── DB Setup ────────────────────────────────────────────────────────────────
 
-DB_PATH = Path(__file__).parent / "campaignx.db"
+DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).parent / "campaignx.db")))
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)

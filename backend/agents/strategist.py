@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 
 async def strategist_node(state: CampaignState) -> dict:
@@ -89,8 +89,8 @@ Return ONLY this JSON:
 }}"""
 
     try:
-        response = llm.invoke(prompt)
-        result = json.loads(clean_llm_json(response.content))
+        content = await invoke_with_retry(llm, prompt)
+        result = json.loads(clean_llm_json(content), strict=False)
         variants = result.get("ab_variants", [])
         rationale = result.get("overall_rationale", "")
         expected_winner = result.get("expected_winner", "")

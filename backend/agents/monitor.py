@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any
 from agents.state import CampaignState
-from agents.base import emit, get_llm
+from agents.base import emit, get_llm, invoke_with_retry
 from tools.campaignx_tools import tool_get_report
 from db.database import save_report, update_campaign_metrics
 
@@ -88,8 +88,8 @@ Focus on click rate (it's weighted 70% in scoring).
 Be specific about which segments or variants underperformed."""
 
     try:
-        response = llm.invoke(analysis_prompt)
-        analysis = response.content.strip()
+        analysis_raw = await invoke_with_retry(llm, analysis_prompt)
+        analysis = analysis_raw.strip()
     except:
         analysis = (
             f"Open rate {all_metrics['open_rate']:.1%}, "

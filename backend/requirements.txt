@@ -3,9 +3,11 @@ uvicorn
 langgraph
 langchain
 langchain-google-genai
+langchain-groq
 langchain-community
 sse-starlette
 pydantic
 python-dotenv
 aiohttp
 requests
+langsmith
