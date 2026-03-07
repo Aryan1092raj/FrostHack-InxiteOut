@@ -41,7 +41,10 @@ app = FastAPI(title="CampaignX Backend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # will update to Vercel URL after deploy
+    allow_origins=[
+        "https://frost-hack-inxite-out.vercel.app",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
