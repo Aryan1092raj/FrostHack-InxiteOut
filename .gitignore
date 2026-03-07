@@ -1,3 +1,34 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+pyrightconfig.json
+
+# Database
+campaignx.db
+*.sqlite3
+
+# Test scripts
+test_status.py
+
+# Branch-split workflow (backend branch)
+frontend/
 # OS / Editor
 .DS_Store
 Thumbs.db
