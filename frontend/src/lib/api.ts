@@ -15,8 +15,9 @@ const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
 // ---------------------------
 export const getCampaigns = async () => {
   const res = await fetch(`${BASE_URL}/api/campaigns`)
+  if (!res.ok) return []
   const data = await res.json()
-  return data.campaigns.map((c: any) => ({
+  return (data.campaigns || []).map((c: any) => ({
     ...c,
     metrics: c.metrics || { open_rate: 0, click_rate: 0, total_sent: 0 }
   }))

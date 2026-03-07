@@ -32,7 +32,9 @@ export default function Dashboard() {
 
   // When the page loads, fetch campaigns
   useEffect(() => {
-    getCampaigns().then(data => setCampaigns(data as Campaign[]))
+    getCampaigns()
+      .then(data => setCampaigns(data as Campaign[]))
+      .catch(() => setCampaigns([]))
   }, [])
 
   // Build chart data from campaigns
