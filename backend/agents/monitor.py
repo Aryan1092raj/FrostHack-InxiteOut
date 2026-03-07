@@ -103,7 +103,10 @@ Be specific about which segments or variants underperformed."""
     update_campaign_metrics(campaign_id, {
         "open_rate": all_metrics["open_rate"],
         "click_rate": all_metrics["click_rate"],
-        "total_sent": all_metrics["total_sent"]
+        "total_sent": all_metrics["total_sent"],
+        "opens": all_metrics["opens"],
+        "clicks": all_metrics["clicks"],
+        "analysis": analysis
     })
 
     await emit(campaign_id, "monitor", "agent_thought",
