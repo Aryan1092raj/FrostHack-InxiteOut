@@ -23,7 +23,7 @@ export default function ApprovalScreen() {
 
   const handleRejectSubmit = async () => {
     await rejectCampaign(id!, rejectNote)
-    navigate(`/new?replan=${id}&note=${encodeURIComponent(rejectNote)}`)
+    navigate(`/new?replan=${id}&campaign_id=${id}&note=${encodeURIComponent(rejectNote)}`)
   }
 
   return (

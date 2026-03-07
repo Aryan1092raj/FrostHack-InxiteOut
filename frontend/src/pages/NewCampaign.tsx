@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { startCampaign } from "../lib/api"
 
@@ -30,6 +30,31 @@ export default function NewCampaign() {
 
   // If this is a re-plan after rejection, show the original feedback
   const replanNote = searchParams.get("note")
+  const replanCampaignId = searchParams.get("campaign_id")
+
+  // Auto-connect to existing campaign stream if this is a re-plan.
+  useEffect(() => {
+    if (!replanCampaignId) return
+
+    setCampaignId(replanCampaignId)
+    const es = new EventSource(`http://localhost:8000/api/campaign/${replanCampaignId}/stream`)
+
+    es.onmessage = (e) => {
+      const event = JSON.parse(e.data)
+      setEvents((prev) => [...prev, event])
+
+      if (event.type === "approval_needed") {
+        setApprovalReady(true)
+        es.close()
+      } else if (event.type === "done" || event.type === "error") {
+        es.close()
+      }
+    }
+
+    es.onerror = () => es.close()
+
+    return () => es.close()
+  }, [replanCampaignId])
 
   const handleLaunch = async () => {
     if (!brief.trim()) return

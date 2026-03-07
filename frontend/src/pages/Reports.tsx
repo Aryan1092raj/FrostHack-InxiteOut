@@ -69,8 +69,8 @@ export default function Reports() {
   })
 
   // 4. Get Agent analysis
-  const agentAnalysis = latestReport?.raw_report?.computed_metrics?.analysis
-    || campaign.metrics?.analysis
+  const agentAnalysis = campaign.metrics?.analysis
+    || latestReport?.raw_report?.computed_metrics?.analysis
     || "Agent is still analyzing performance data..."
 
   return (

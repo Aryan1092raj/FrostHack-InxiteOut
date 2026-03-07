@@ -78,5 +78,5 @@ export const getCampaignReport = async (id: string) => {
 export const getCampaignReports = async (id: string) => {
   const res = await fetch(`${BASE_URL}/api/campaign/${id}/reports`)
   const data = await res.json()
-  return data.reports
+  return data.reports || []
 }
