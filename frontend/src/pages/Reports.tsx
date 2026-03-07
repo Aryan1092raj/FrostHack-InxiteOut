@@ -121,6 +121,30 @@ export default function Reports() {
         </div>
       </div>
 
+      {/* Re-approval banner */}
+      {campaign.status === "awaiting_approval" && (
+        <div className="anim-up delay-1" style={{
+          marginBottom: "1.25rem", padding: "1rem 1.25rem",
+          background: "rgba(245,200,66,0.06)", border: "1px solid rgba(245,200,66,0.2)",
+          borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem"
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <span style={{ fontSize: "1.2rem" }}>⚡</span>
+            <div>
+              <div className="font-display" style={{ fontWeight: 700, fontSize: "0.875rem" }}>
+                Optimized Campaign Needs Approval
+              </div>
+              <p style={{ color: "var(--t3)", fontSize: "0.75rem", marginTop: 2 }}>
+                AI agent has re-optimized based on performance. Review the updated strategy before re-launch.
+              </p>
+            </div>
+          </div>
+          <button className="btn btn-gold" onClick={() => navigate(`/approve/${id}`)}>
+            Review & Approve
+          </button>
+        </div>
+      )}
+
       {/* KPI Row */}
       <div className="anim-up delay-1" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "0.85rem", marginBottom: "1.75rem" }}>
         {[
@@ -186,9 +210,23 @@ export default function Reports() {
                   <Line type="monotone" dataKey="Click Rate" stroke="var(--gold)" strokeWidth={2} dot={{ r: 4, fill: "var(--gold)" }} activeDot={{ r: 6 }} />
                 </LineChart>
               </ResponsiveContainer>
+            ) : campaign.status === "awaiting_approval" ? (
+              <div style={{ height: 180, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.75rem" }}>
+                <div style={{ fontSize: "1.5rem" }}>⚡</div>
+                <div className="font-display" style={{ fontWeight: 700, fontSize: "0.95rem" }}>
+                  Optimized Campaign Ready for Review
+                </div>
+                <p style={{ color: "var(--t3)", fontSize: "0.78rem", textAlign: "center", maxWidth: 360 }}>
+                  The AI agent has optimized the campaign based on performance data. Approve the new version to continue.
+                </p>
+                <button className="btn btn-gold btn-sm" onClick={() => navigate(`/approve/${id}`)}>
+                  Review & Approve →
+                </button>
+              </div>
             ) : (
               <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--t3)", fontSize: "0.83rem", fontStyle: "italic" }}>
-                Waiting for campaign execution…
+                <span className="cursor" style={{ marginRight: 8 }} />
+                {campaign.status === "running" ? "Campaign is executing — results will appear shortly…" : "Waiting for campaign execution…"}
               </div>
             )}
           </div>

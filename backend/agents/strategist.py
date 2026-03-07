@@ -25,13 +25,14 @@ async def strategist_node(state: CampaignState) -> dict:
 
     llm = get_llm(temperature=0.5)
 
-    # Build future send times
+    # Build future send times — always use tomorrow to guarantee future
     now = datetime.utcnow() + timedelta(hours=5, minutes=30)  # IST
+    tomorrow = now + timedelta(days=1)
     times = {
-        "morning": (now + timedelta(hours=1)).strftime("%d:%m:%y 09:00:00"),
-        "afternoon": (now + timedelta(hours=2)).strftime("%d:%m:%y 13:00:00"),
-        "evening": (now + timedelta(hours=3)).strftime("%d:%m:%y 18:00:00"),
-        "night": (now + timedelta(hours=4)).strftime("%d:%m:%y 20:00:00"),
+        "morning": tomorrow.strftime("%d:%m:%y 09:00:00"),
+        "afternoon": tomorrow.strftime("%d:%m:%y 13:00:00"),
+        "evening": tomorrow.strftime("%d:%m:%y 18:00:00"),
+        "night": tomorrow.strftime("%d:%m:%y 20:00:00"),
     }
 
     prompt = f"""You are a digital marketing strategist for SuperBFSI launching XDeposit term deposit.

@@ -41,6 +41,14 @@ async def executor_node(state: CampaignState) -> dict:
             await emit(campaign_id, "executor", "action",
                        f"✅ {variant} sent! External campaign ID: {ext_id}")
 
+    if not external_campaign_ids:
+        await emit(campaign_id, "executor", "agent_thought",
+                   "❌ All email sends failed. Check API key, send_time format, and customer IDs.")
+        raise RuntimeError(
+            f"All {len(emails)} email sends failed — 0 campaigns delivered. "
+            "Likely cause: invalid send_time (must be future DD:MM:YY HH:MM:SS) or bad API key."
+        )
+
     await emit(campaign_id, "executor", "agent_thought",
                f"✅ All variants sent. {len(external_campaign_ids)} campaigns live. "
                f"Handing off to monitor...")

@@ -67,6 +67,18 @@ async def human_approval_node(state: CampaignState) -> dict:
 
 # ─── Routing Functions ────────────────────────────────────────────────────────
 
+async def entry_router(state: CampaignState) -> dict:
+    """No-op node used as entry point for conditional routing."""
+    return {}
+
+
+def route_from_entry(state: CampaignState) -> str:
+    """If resuming after server restart (emails exist, status=running), skip to executor."""
+    if state.get("emails") and state["status"] == "running":
+        return "executor"
+    return "profiler"
+
+
 def route_after_approval(state: CampaignState) -> str:
     if state["status"] == "running":
         return "executor"
@@ -87,6 +99,7 @@ def build_graph():
     workflow = StateGraph(CampaignState)
 
     # Add all nodes
+    workflow.add_node("entry_router", entry_router)
     workflow.add_node("profiler", profiler_node)
     workflow.add_node("strategist", strategist_node)
     workflow.add_node("content_gen", content_gen_node)
@@ -95,8 +108,13 @@ def build_graph():
     workflow.add_node("monitor", monitor_node)
     workflow.add_node("optimizer", optimizer_node)
 
-    # Entry point
-    workflow.set_entry_point("profiler")
+    # Entry point — routes to profiler (fresh) or executor (resume)
+    workflow.set_entry_point("entry_router")
+    workflow.add_conditional_edges(
+        "entry_router",
+        route_from_entry,
+        {"profiler": "profiler", "executor": "executor"}
+    )
 
     # Fixed edges
     workflow.add_edge("profiler", "strategist")
@@ -131,31 +149,35 @@ def build_graph():
 
 # ─── Run Pipeline ─────────────────────────────────────────────────────────────
 
-async def run_campaign_pipeline(campaign_id: str, brief: str):
+async def run_campaign_pipeline(campaign_id: str, brief: str, resume_state: dict = None):
     """
     Main entry point called by main.py.
     Runs the full LangGraph agent pipeline for a campaign.
+    If resume_state is provided, resumes from executor (e.g. after server restart).
     """
     queue = sse_queues.get(campaign_id)
 
     try:
         graph = build_graph()
 
-        initial_state: CampaignState = {
-            "campaign_id": campaign_id,
-            "brief": brief,
-            "customers": [],
-            "segments": [],
-            "strategy": {},
-            "emails": [],
-            "external_campaign_ids": [],
-            "metrics": {},
-            "iteration": 1,
-            "max_iterations": 3,
-            "rejection_reason": None,
-            "optimization_notes": "",
-            "status": "planning"
-        }
+        if resume_state:
+            initial_state = resume_state
+        else:
+            initial_state: CampaignState = {
+                "campaign_id": campaign_id,
+                "brief": brief,
+                "customers": [],
+                "segments": [],
+                "strategy": {},
+                "emails": [],
+                "external_campaign_ids": [],
+                "metrics": {},
+                "iteration": 1,
+                "max_iterations": 3,
+                "rejection_reason": None,
+                "optimization_notes": "",
+                "status": "planning"
+            }
 
         config = {"configurable": {"thread_id": campaign_id}}
 
