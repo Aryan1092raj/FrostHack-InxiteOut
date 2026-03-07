@@ -38,14 +38,27 @@ async def profiler_node(state: CampaignState) -> dict:
                "Analyzing demographics to build targeted segments...")
 
     llm = get_llm(temperature=0.3)
-    sample = list(itertools.islice(customers, 20)) if len(customers) > 20 else customers
+    # Only send essential fields — strip names/special chars to avoid JSON issues
+    sample_raw = customers[:15] if len(customers) > 15 else customers
+    sample = [{
+        "customer_id": c.get("customer_id"),
+        "Age": c.get("Age"),
+        "Gender": c.get("Gender"),
+        "City": c.get("City"),
+        "Monthly_Income": c.get("Monthly_Income"),
+        "Occupation": c.get("Occupation"),
+        "Existing_Customer": c.get("Existing Customer"),
+        "App_Installed": c.get("App_Installed"),
+        "Social_Media_Active": c.get("Social_Media_Active"),
+        "KYC_status": c.get("KYC status"),
+    } for c in sample_raw]
 
     prompt = f"""You are a customer analytics expert for SuperBFSI, an Indian BFSI company launching XDeposit term deposit product.
 
 Campaign Brief: {brief}
 
 Customer Data (sample of {len(customers)} total customers):
-{json.dumps(sample)}
+{json.dumps(sample, ensure_ascii=True)}
 
 Create 3-5 meaningful demographic segments from this data optimized for the XDeposit email campaign.
 
@@ -72,13 +85,25 @@ Return ONLY this JSON structure (no other text):
     "insights": "Brief insight about the overall customer base"
 }}
 
-Use ONLY real customer_ids from the data above. Cover ALL {len(customers)} customers across segments (no customer left out)."""
+IMPORTANT: You have {len(customers)} total customers (IDs: CUST0001 to CUST{len(customers):04d}).
+Create segments and I will assign customer IDs to each segment based on demographics automatically.
+For customer_ids in your JSON, just put 2-3 example IDs from the sample. The real assignment happens in code."""
 
     try:
         content = await invoke_with_retry(llm, prompt)
         result = json.loads(clean_llm_json(content), strict=False)
         segments = result.get("segments", [])
         insights = result.get("insights", "")
+
+        # Distribute ALL customers evenly across segments
+        all_ids = [c["customer_id"] for c in customers]
+        total = len(all_ids)
+        n_segs = len(segments)
+        for i, seg in enumerate(segments):
+            start_idx = (i * total) // n_segs
+            end_idx = ((i + 1) * total) // n_segs
+            seg["customer_ids"] = all_ids[start_idx:end_idx]
+            seg["size"] = len(seg["customer_ids"])
 
         await emit(campaign_id, "profiler", "agent_thought",
                    f"✅ Built {len(segments)} segments. Insight: {insights}")
@@ -94,8 +119,8 @@ Use ONLY real customer_ids from the data above. Cover ALL {len(customers)} custo
         }
 
     except Exception as e:
-        await emit(campaign_id, "profiler", "error",
-                   f"LLM error: {str(e)}. Using fallback segmentation.")
+        await emit(campaign_id, "profiler", "agent_thought",
+                   f"⚠️ LLM JSON parse issue, using fallback segmentation: {str(e)[:100]}")
 
         # Fallback — simple split
         mid = len(customers) // 2

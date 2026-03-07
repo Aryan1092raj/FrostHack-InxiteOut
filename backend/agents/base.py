@@ -88,11 +88,10 @@ async def emit(campaign_id: str, agent: str, event_type: str,
 
 
 def clean_llm_json(text: str) -> str:
-    """Strip markdown code fences and fix control characters in LLM JSON responses."""
-    import re
+    """Strip markdown and extract valid JSON from LLM response."""
     text = text.strip()
 
-    # Handle ```json ... ``` blocks
+    # Remove markdown code fences
     if "```" in text:
         parts = text.split("```")
         for part in parts:
@@ -103,26 +102,33 @@ def clean_llm_json(text: str) -> str:
                 text = part
                 break
 
-    # Find first { or [ and last } or ]
-    start = min(
-        text.find("{") if "{" in text else len(text),
-        text.find("[") if "[" in text else len(text)
-    )
-    end = max(text.rfind("}"), text.rfind("]"))
+    # Find outermost { } or [ ]
+    start = -1
 
-    if 0 <= start < end:
-        text = text[start:end+1]
+    for i, ch in enumerate(text):
+        if ch in "{[" and start == -1:
+            start = i
+            break
 
-    # Fix control characters inside JSON string values
-    # Replace literal newlines/tabs/carriage returns with escaped versions
-    def fix_string(match):
-        s = match.group(0)
-        s = s.replace('\n', '\\n')
-        s = s.replace('\r', '\\r')
-        s = s.replace('\t', '\\t')
-        return s
+    if start == -1:
+        return text
 
-    # Match JSON string values (between double quotes, handling escaped quotes)
-    text = re.sub(r'"(?:[^"\\]|\\.)*"', fix_string, text, flags=re.DOTALL)
+    # Match brackets properly
+    open_char = text[start]
+    close_char = "}" if open_char == "{" else "]"
+    depth = 0
+    end = -1
+
+    for i in range(start, len(text)):
+        if text[i] == open_char:
+            depth += 1
+        elif text[i] == close_char:
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end != -1:
+        return text[start:end+1]
 
     return text
