@@ -67,6 +67,12 @@ async def startup():
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 
+@app.get("/ping")
+async def ping():
+    """Lightweight keep-alive for cron jobs — no API calls wasted."""
+    return {"status": "alive"}
+
+
 @app.get("/api/health")
 async def health():
     return {
