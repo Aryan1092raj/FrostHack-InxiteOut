@@ -1,50 +1,31 @@
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# IDEs and Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-pyrightconfig.json
-
-# Database
-campaignx.db
-*.sqlite3
-
-# Test scripts
-test_status.py
-
-# Branch-split workflow (backend branch)
-frontend/
 # OS / Editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Logs
 *.log
 
 # Python
+.env
 .venv/
+env/
+venv/
+ENV/
 **/__pycache__/
 *.py[cod]
+*$py.class
+pyrightconfig.json
+
+# Backend data
 backend/.env
 backend/db/*.db
 backend/db/*.db-journal
+campaignx.db
+*.sqlite3
 
 # Frontend local artifacts
 frontend/node_modules/
@@ -53,5 +34,5 @@ frontend/.vite/
 frontend/.env.local
 frontend/.env.*.local
 
-# Branch-split workflow (frontend branch)
-backend/
+# Test scripts
+test_status.py
