@@ -29,9 +29,13 @@ export default function Reports() {
   const [tab, setTab] = useState<"overview" | "segments" | "ab" | "analysis">("overview")
 
   useEffect(() => {
-    Promise.all([getCampaign(id!), getCampaignReports(id!)]).then(([c, r]) => {
-      setCampaign(c); setReports(r); setLoading(false)
-    })
+    const fetch = () =>
+      Promise.all([getCampaign(id!), getCampaignReports(id!)]).then(([c, r]) => {
+        setCampaign(c); setReports(r); setLoading(false)
+      })
+    fetch()
+    const t = setInterval(fetch, 8000)
+    return () => clearInterval(t)
   }, [id])
 
   if (loading || !campaign) return (
