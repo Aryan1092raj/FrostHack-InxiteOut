@@ -26,3 +26,6 @@ campaignx.db
 
 # Test scripts
 test_status.py
+
+# Branch-split workflow (backend branch)
+frontend/
