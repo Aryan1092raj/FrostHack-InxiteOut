@@ -18,6 +18,7 @@ const agentColors: Record<string, string> = {
   monitor: "text-teal-400",
   optimizer: "text-red-400",
 }
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
 
 export default function NewCampaign() {
   const [brief, setBrief] = useState("")
@@ -37,7 +38,7 @@ export default function NewCampaign() {
     if (!replanCampaignId) return
 
     setCampaignId(replanCampaignId)
-    const es = new EventSource(`http://localhost:8000/api/campaign/${replanCampaignId}/stream`)
+    const es = new EventSource(`${API_URL}/api/campaign/${replanCampaignId}/stream`)
 
     es.onmessage = (e) => {
       const event = JSON.parse(e.data)
@@ -67,7 +68,7 @@ export default function NewCampaign() {
     setLoading(false)
 
     // ---- DAY 6 SSE replacement ----
-    const es = new EventSource(`http://localhost:8000/api/campaign/${result.campaign_id}/stream`)
+    const es = new EventSource(`${API_URL}/api/campaign/${result.campaign_id}/stream`)
 
     es.onmessage = (e) => {
       const event = JSON.parse(e.data)
