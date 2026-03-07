@@ -40,7 +40,14 @@ Campaign Brief: {brief}
 
 Current Iteration: {iteration}
 Available Customer Segments:
-{json.dumps(segments, indent=2)}
+{json.dumps([{
+    "segment_id": s["segment_id"],
+    "name": s["name"],
+    "size": s["size"],
+    "targeting_rationale": s.get("targeting_rationale", ""),
+    "optimal_send_time": s.get("optimal_send_time", "morning"),
+    "tone": s.get("tone", "professional")
+} for s in segments], indent=2)}
 
 Available Send Times (use DD:MM:YY HH:MM:SS format):
 - Morning: {times['morning']}
@@ -116,8 +123,8 @@ Return ONLY this JSON:
         return {"strategy": strategy, "status": "strategy_ready"}
 
     except Exception as e:
-        await emit(campaign_id, "strategist", "error",
-                   f"Strategy error: {str(e)}. Using default strategy.")
+        await emit(campaign_id, "strategist", "agent_thought",
+                   f"⚠️ Using default strategy: {str(e)[:80]}")
 
         strategy = {
             "ab_variants": [

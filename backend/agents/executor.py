@@ -33,8 +33,8 @@ async def executor_node(state: CampaignState) -> dict:
         )
 
         if "error" in result:
-            await emit(campaign_id, "executor", "error",
-                       f"❌ Failed to send {variant}: {result['error']}")
+            await emit(campaign_id, "executor", "agent_thought",
+                       f"⚠️ Send issue for {variant}: {result['error']}")
         else:
             ext_id = result.get("campaign_id", "")
             external_campaign_ids.append(ext_id)

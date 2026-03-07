@@ -6,7 +6,7 @@ from shared import sse_queues
 
 load_dotenv()
 
-def get_llm(temperature: float = 0.7):
+def get_llm(temperature: float = 0.7, force_gemini: bool = False):
     """
     Returns best available LLM.
     Tries Groq first (faster, higher limits), falls back to Gemini.
@@ -14,37 +14,17 @@ def get_llm(temperature: float = 0.7):
     groq_key = os.getenv("GROQ_API_KEY")
     gemini_key = os.getenv("GEMINI_API_KEY")
 
-    if groq_key:
-        try:
-            from groq import Groq
-
-            class GroqLLM:
-                """Wrapper around raw Groq SDK to match LangChain interface."""
-                def __init__(self, api_key, model, temperature):
-                    self.client = Groq(api_key=api_key)
-                    self.model = model
-                    self.temperature = temperature
-
-                def invoke(self, prompt):
-                    completion = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=self.temperature
-                    )
-                    return completion.choices[0].message  # has .content
-
-            return GroqLLM(
-                api_key=groq_key,
-                model="llama-3.3-70b-versatile",
-                temperature=temperature
-            )
-        except ImportError:
-            print("[Warning] groq package not installed. Falling back to Gemini.")
-    
-    if gemini_key:
+    if groq_key and not force_gemini:
+        from langchain_groq import ChatGroq
+        return ChatGroq(
+            model="llama-3.3-70b-versatile",
+            groq_api_key=groq_key,
+            temperature=temperature
+        )
+    elif gemini_key:
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",   # explicitly 1.5 not 2.0
+            model="gemini-1.5-flash",
             google_api_key=gemini_key,
             temperature=temperature
         )
@@ -55,8 +35,10 @@ def get_llm(temperature: float = 0.7):
 async def invoke_with_retry(llm, prompt: str, max_retries: int = 3) -> str:
     """
     Calls LLM with automatic retry on rate limit errors.
-    Waits 40 seconds between retries.
+    Switches to Gemini after second Groq failure.
     """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+
     for attempt in range(max_retries):
         try:
             response = llm.invoke(prompt)
@@ -64,10 +46,19 @@ async def invoke_with_retry(llm, prompt: str, max_retries: int = 3) -> str:
         except Exception as e:
             error_str = str(e)
             if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
-                wait_time = 40 * (attempt + 1)  # 40s, 80s, 120s
-                print(f"[Rate limit] Attempt {attempt+1}/{max_retries}. Waiting {wait_time}s...")
-                await asyncio.sleep(wait_time)
-                continue
+                # On second attempt switch to Gemini
+                if attempt == 1 and gemini_key:
+                    print(f"[Rate limit] Switching to Gemini fallback...")
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    llm = ChatGoogleGenerativeAI(
+                        model="gemini-1.5-flash",
+                        google_api_key=gemini_key,
+                        temperature=0.7
+                    )
+                else:
+                    wait_time = 15 * (attempt + 1)
+                    print(f"[Rate limit] Attempt {attempt+1}/{max_retries}. Waiting {wait_time}s...")
+                    await asyncio.sleep(wait_time)
             else:
                 raise e
     raise Exception(f"LLM failed after {max_retries} retries")

@@ -110,8 +110,8 @@ Return ONLY this JSON:
             })
 
         except Exception as e:
-            await emit(campaign_id, "content_gen", "error",
-                       f"Content error for {variant_id}: {str(e)}. Using template.")
+            await emit(campaign_id, "content_gen", "agent_thought",
+                       f"⚠️ Content fallback for {variant_id}: {str(e)[:80]}")
 
             # Fallback template
             subject = f"XDeposit — Earn More with SuperBFSI's Best Term Deposit Rates"

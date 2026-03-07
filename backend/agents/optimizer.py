@@ -109,6 +109,6 @@ Return ONLY this JSON:
         }
 
     except Exception as e:
-        await emit(campaign_id, "optimizer", "error",
-                   f"Optimizer error: {str(e)}. Stopping loop.")
+        await emit(campaign_id, "optimizer", "agent_thought",
+                   f"⚠️ Optimizer fallback: {str(e)[:80]}. Stopping loop.")
         return {"status": "done", "optimization_notes": f"Optimizer error: {str(e)}"}

@@ -32,8 +32,8 @@ async def monitor_node(state: CampaignState) -> dict:
         result = tool_get_report(ext_id)
 
         if "error" in result:
-            await emit(campaign_id, "monitor", "error",
-                       f"Report error for {ext_id}: {result['error']}")
+            await emit(campaign_id, "monitor", "agent_thought",
+                       f"⚠️ Report issue for {ext_id}: {result['error']}")
             continue
 
         computed = result.get("computed_metrics", {})
