@@ -67,6 +67,18 @@ async def strategist_node(state: CampaignState) -> dict:
         rescue_section = ""
         customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
 
+    segments_json = json.dumps([
+        {
+            "segment_id": s["segment_id"],
+            "name": s["name"],
+            "size": s["size"],
+            "targeting_rationale": s.get("targeting_rationale", ""),
+            "optimal_send_time": s.get("optimal_send_time", "morning"),
+            "tone": s.get("tone", "professional"),
+        }
+        for s in segments
+    ], indent=2)
+
     prompt = f"""You are a digital marketing strategist for SuperBFSI launching XDeposit term deposit.
 
 Campaign Brief: {brief}
@@ -76,14 +88,7 @@ Current Iteration: {iteration}
 {customer_pool_note}
 
 Available Customer Segments (for reference):
-{json.dumps([{{
-    "segment_id": s["segment_id"],
-    "name": s["name"],
-    "size": s["size"],
-    "targeting_rationale": s.get("targeting_rationale", ""),
-    "optimal_send_time": s.get("optimal_send_time", "morning"),
-    "tone": s.get("tone", "professional")
-}} for s in segments], indent=2)}
+{segments_json}
 
 Available Send Times (DD:MM:YY HH:MM:SS format):
 - Morning: {times['morning']}
