@@ -36,7 +36,9 @@ async def optimizer_node(state: CampaignState) -> dict:
                         winning_variant_info = {
                             "variant": email.get("variant", ""),
                             "subject": email.get("subject", ""),
+                            "body_excerpt": email.get("body", "")[:200],
                             "tone": email.get("tone", "professional"),
+                            "send_time": email.get("send_time", ""),
                             "click_rate": pc.get("click_rate", 0),
                             "open_rate": pc.get("open_rate", 0),
                         }
@@ -80,6 +82,26 @@ async def optimizer_node(state: CampaignState) -> dict:
         await emit(campaign_id, "optimizer", "agent_thought",
                    f"⚠️ Could not compute underperformers: {str(e)[:60]}. Will use full cohort.")
 
+    # ── Cohort coverage check ─────────────────────────────────────────────────
+    all_customer_ids = set(c["customer_id"] for c in state.get("customers", []))
+    all_emailed = set(state.get("all_emailed_customer_ids", []))
+    uncovered = all_customer_ids - all_emailed
+    coverage_note = ""
+
+    if uncovered:
+        await emit(campaign_id, "optimizer", "agent_thought",
+                   f"⚠️ {len(uncovered)}/{len(all_customer_ids)} customers never emailed! "
+                   f"Merging into rescue pool for next iteration.")
+        # Uncovered customers get priority — prepend them before non-clickers
+        uncovered_list = list(uncovered)
+        underperforming_customer_ids = uncovered_list + [
+            cid for cid in underperforming_customer_ids if cid not in uncovered
+        ]
+        coverage_note = (
+            f"CRITICAL: {len(uncovered)} customers never emailed — cover them FIRST "
+            f"using the winning variant style. "
+        )
+
     # ── Stop conditions ───────────────────────────────────────────────────────
     base_return = {
         "winning_variant_info": winning_variant_info,
@@ -108,6 +130,16 @@ async def optimizer_node(state: CampaignState) -> dict:
 
     n_underperform = len(underperforming_customer_ids) if underperforming_customer_ids else metrics.get("total_sent", 0)
 
+    per_campaign_summary = json.dumps([
+        {k: v for k, v in pc.items() if k != "customer_ids"}
+        for pc in per_campaign
+    ], indent=2)
+    exploit_instruction = (
+        "EXPLOIT MODE: replicate the winning variant approach with minor subject tweaks only."
+        if iteration >= 3
+        else "Explore different tones and subject formats."
+    )
+
     prompt = f"""You are a campaign optimization expert for SuperBFSI's XDeposit campaign.
 
 Current Results (Iteration {iteration}/{max_iterations}):
@@ -115,25 +147,32 @@ Current Results (Iteration {iteration}/{max_iterations}):
 - Click Rate: {click_rate:.1%} (target: >50% — weighted 70% in scoring)
 - Total Sent: {metrics.get('total_sent', 0)}
 - Non-clickers to rescue next: {n_underperform}
-
+- Cohort coverage: {len(all_emailed)}/{len(all_customer_ids)} customers reached
+{coverage_note}
 Best Performing Variant:
 - Subject: "{winning_variant_info.get('subject', 'N/A')}"
 - Tone: {winning_variant_info.get('tone', 'N/A')}
 - Click Rate: {winning_variant_info.get('click_rate', 0):.1%}
+- Body excerpt: "{winning_variant_info.get('body_excerpt', 'N/A')}"
 
 Performance Analysis: {analysis}
 
 Per-Campaign Breakdown:
-{json.dumps(per_campaign, indent=2)}
+{per_campaign_summary}
 
-Next iteration will ONLY re-target the {n_underperform} non-clickers.
+CRITICAL RULES:
+1. BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
+2. Preferred tones: trust-building, aspirational, informational, warm/personal.
+3. {exploit_instruction}
+
+Next iteration will re-target the {n_underperform} non-clickers/uncovered customers.
 Provide specific instructions for the rescue send to maximise click rate.
 
 Return ONLY this JSON:
 {{
     "should_continue": true,
     "optimization_notes": "Tone/angle/content strategy for the rescue send",
-    "subject_line_strategy": "Specific format to try: question / number-led / urgency / personalised",
+    "subject_line_strategy": "Specific format to try: question / number-led / personalised (NOT urgency)",
     "content_adjustments": "What to change in the email body to drive more clicks",
     "timing_adjustments": "Best send time for non-clickers (morning / evening / night)"
 }}"""
@@ -149,6 +188,7 @@ Return ONLY this JSON:
         timing_adj = result.get("timing_adjustments", "")
 
         full_notes = (
+            f"{coverage_note}"
             f"Iter {iteration} winner: subject='{winning_variant_info.get('subject', '')}' "
             f"tone={winning_variant_info.get('tone', '')} "
             f"click={winning_variant_info.get('click_rate', 0):.1%}. "

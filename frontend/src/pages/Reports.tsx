@@ -51,12 +51,24 @@ export default function Reports() {
   const segments: any[] = campaign.strategy?.segments || []
   const emails: any[] = campaign.emails || []
 
-  // Optimization history
-  const historyData = reports.map((r, i) => ({
-    cycle: `Cycle ${i + 1}`,
-    "Open Rate": Math.round(r.open_rate * 100),
-    "Click Rate": Math.round(r.click_rate * 100),
-  }))
+  // Optimization history — group pairs of reports into iteration cycles
+  // (each iteration sends 2 variants → 2 reports per cycle)
+  const historyData: {cycle: string, "Open Rate": number, "Click Rate": number}[] = []
+  for (let i = 0; i < reports.length; i += 2) {
+    const pair = reports.slice(i, i + 2)
+    const totalSent = pair.reduce((s: number, r: any) => s + (r.total_sent || 0), 0)
+    const weightedOpen = totalSent > 0
+      ? Math.round(pair.reduce((s: number, r: any) => s + r.open_rate * (r.total_sent || 0), 0) / totalSent * 100)
+      : 0
+    const weightedClick = totalSent > 0
+      ? Math.round(pair.reduce((s: number, r: any) => s + r.click_rate * (r.total_sent || 0), 0) / totalSent * 100)
+      : 0
+    historyData.push({
+      cycle: `Cycle ${Math.floor(i / 2) + 1}`,
+      "Open Rate": weightedOpen,
+      "Click Rate": weightedClick,
+    })
+  }
 
   // Segment performance
   const segData = segments.map((seg: any) => {
@@ -151,7 +163,7 @@ export default function Reports() {
           { label: "Open Rate",  value: `${latestOpen}%`,   color: "var(--teal)",   prog: latestOpen,   bar: "var(--teal)" },
           { label: "Click Rate", value: `${latestClick}%`,  color: "var(--gold)",   prog: latestClick,  bar: "var(--gold)" },
           { label: "Emails Sent",value: totalSent.toLocaleString(), color: "var(--purple)", prog: 0, bar: "var(--purple)" },
-          { label: "Iterations", value: reports.length,  color: "var(--orange)",  prog: 0, bar: "var(--orange)" },
+          { label: "Iterations", value: campaign.iteration || Math.ceil(reports.length / 2),  color: "var(--orange)",  prog: 0, bar: "var(--orange)" },
         ].map(s => (
           <div key={s.label} className="stat">
             <div className="label" style={{ marginBottom: 8 }}>{s.label}</div>

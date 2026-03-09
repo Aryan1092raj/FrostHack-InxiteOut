@@ -178,6 +178,7 @@ async def run_campaign_pipeline(campaign_id: str, brief: str, resume_state: dict
                 "optimization_notes": "",
                 "underperforming_customer_ids": [],
                 "winning_variant_info": {},
+                "all_emailed_customer_ids": [],
                 "status": "planning"
             }
 

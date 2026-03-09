@@ -77,6 +77,10 @@ Variant Style:
 - Include emojis: {include_emoji}
 - Include CTA URL: {include_url}
 - Rejection feedback to address: {rejection_reason or 'None'}
+- BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this
+- Preferred tones: trust-building, aspirational, informational, warm/personal
+{f'- PREVIOUS WINNING subject: "{winning_variant_info.get("subject", "")}" — use a DIFFERENT format (question/number-led/personal). Do NOT repeat this subject.' if iteration > 1 and winning_variant_info.get('subject') else ''}
+{f'- WINNING body excerpt: "{winning_variant_info.get("body_excerpt", "")[:100]}..." — build on this style' if iteration > 1 and winning_variant_info.get('body_excerpt') else ''}
 
 Email Rules (STRICT):
 - Subject: Plain English text only, max 200 characters, NO URLs
@@ -124,17 +128,50 @@ Return ONLY this JSON:
             await emit(campaign_id, "content_gen", "agent_thought",
                        f"⚠️ Content fallback for {variant_id}: {str(e)[:80]}")
 
-            # Fallback template
-            subject = f"XDeposit — Earn More with SuperBFSI's Best Term Deposit Rates"
-            body = (
-                f"Dear Valued Customer,\n\n"
-                f"We're excited to introduce **XDeposit**, SuperBFSI's flagship term deposit "
-                f"that gives you **1% higher returns** than our competitors.\n\n"
-                f"🌟 Special offer for female senior citizens: Additional **0.25% bonus rate**!\n\n"
-                f"Don't miss this opportunity to grow your savings.\n\n"
-                f"👉 Explore XDeposit: {XDEPOSIT_URL}\n\n"
-                f"Warm regards,\nSuperBFSI Team"
-            )
+            # Rotate between 3 fallback templates to avoid identical A/B emails
+            fallback_templates = [
+                {
+                    "subject": "XDeposit — Earn More with SuperBFSI's Best Term Deposit Rates",
+                    "body": (
+                        f"Dear Valued Customer,\n\n"
+                        f"We're excited to introduce **XDeposit**, SuperBFSI's flagship term deposit "
+                        f"that gives you **1% higher returns** than our competitors.\n\n"
+                        f"🌟 Special offer for female senior citizens: Additional **0.25% bonus rate**!\n\n"
+                        f"Don't miss this opportunity to grow your savings.\n\n"
+                        f"👉 Explore XDeposit: {XDEPOSIT_URL}\n\n"
+                        f"Warm regards,\nSuperBFSI Team"
+                    ),
+                },
+                {
+                    "subject": "Is Your Fixed Deposit Earning Enough? Compare with XDeposit",
+                    "body": (
+                        f"Dear Customer,\n\n"
+                        f"What if your savings could earn **1% more** every year?\n\n"
+                        f"With **XDeposit** by SuperBFSI, that's exactly what you get — returns that "
+                        f"are consistently **1 percentage point higher** than traditional FDs.\n\n"
+                        f"🌟 Female senior citizens enjoy an **extra 0.25%** bonus!\n\n"
+                        f"See how much more you could earn:\n"
+                        f"👉 {XDEPOSIT_URL}\n\n"
+                        f"Best wishes,\nSuperBFSI Team"
+                    ),
+                },
+                {
+                    "subject": "XDeposit: 1% Higher Returns — See How Your Savings Could Grow",
+                    "body": (
+                        f"Dear Customer,\n\n"
+                        f"At SuperBFSI, we believe you deserve better returns on your savings.\n\n"
+                        f"That's why we created **XDeposit** — a term deposit that gives you "
+                        f"**1% more** than competitors, with zero extra effort.\n\n"
+                        f"🌟 **Special bonus**: Female senior citizens get an additional **0.25%** rate.\n\n"
+                        f"Discover XDeposit today:\n"
+                        f"👉 {XDEPOSIT_URL}\n\n"
+                        f"Regards,\nSuperBFSI Team"
+                    ),
+                },
+            ]
+            template = fallback_templates[len(emails) % len(fallback_templates)]
+            subject = template["subject"]
+            body = template["body"]
 
             emails.append({
                 "variant": variant_id,

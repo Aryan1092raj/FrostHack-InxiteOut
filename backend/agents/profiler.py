@@ -39,7 +39,7 @@ async def profiler_node(state: CampaignState) -> dict:
 
     llm = get_llm(temperature=0.3)
     # Only send essential fields — strip names/special chars to avoid JSON issues
-    sample_raw = customers[:15] if len(customers) > 15 else customers
+    sample_raw = customers[:100] if len(customers) > 100 else customers
     sample = [{
         "customer_id": c.get("customer_id"),
         "Age": c.get("Age"),

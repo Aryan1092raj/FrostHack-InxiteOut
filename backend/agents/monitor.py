@@ -13,6 +13,12 @@ async def monitor_node(state: CampaignState) -> dict:
     await emit(campaign_id, "monitor", "agent_thought",
                f"Fetching performance reports for {len(external_campaign_ids)} campaigns...")
 
+    # Build lookup: external_id → email details (emails[i] ↔ external_campaign_ids[i])
+    email_by_ext_id: dict = {}
+    for i, ext_id in enumerate(external_campaign_ids):
+        if i < len(state.get("emails", [])):
+            email_by_ext_id[ext_id] = state["emails"][i]
+
     # Small wait to allow gamified metrics to register
     await asyncio.sleep(2)
 
@@ -47,11 +53,16 @@ async def monitor_node(state: CampaignState) -> dict:
         all_metrics["total_sent"] += total
         all_metrics["opens"] += opens
         all_metrics["clicks"] += clicks
+
+        email_info = email_by_ext_id.get(ext_id, {})
         all_metrics["per_campaign"].append({
             "external_campaign_id": ext_id,
             "open_rate": open_rate,
             "click_rate": click_rate,
-            "total_sent": total
+            "total_sent": total,
+            "subject": email_info.get("subject", ""),
+            "tone": email_info.get("tone", ""),
+            "customer_ids": email_info.get("customer_ids", []),
         })
 
         # Save to DB

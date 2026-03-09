@@ -49,11 +49,20 @@ async def executor_node(state: CampaignState) -> dict:
             "Likely cause: invalid send_time (must be future DD:MM:YY HH:MM:SS) or bad API key."
         )
 
+    # Accumulate all customer IDs ever emailed (across all iterations)
+    existing_emailed = set(state.get("all_emailed_customer_ids", []))
+    new_emailed = set()
+    for email in emails:
+        new_emailed.update(email.get("customer_ids", []))
+    all_emailed = list(existing_emailed | new_emailed)
+
     await emit(campaign_id, "executor", "agent_thought",
                f"✅ All variants sent. {len(external_campaign_ids)} campaigns live. "
+               f"Cohort coverage: {len(all_emailed)}/{len(state.get('customers', []))} customers emailed. "
                f"Handing off to monitor...")
 
     return {
         "external_campaign_ids": external_campaign_ids,
+        "all_emailed_customer_ids": all_emailed,
         "status": "running"
     }

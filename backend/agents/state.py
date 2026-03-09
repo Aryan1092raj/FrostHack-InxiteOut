@@ -16,3 +16,4 @@ class CampaignState(TypedDict):
     status: str                      # Current pipeline status
     underperforming_customer_ids: List[str]  # Customers who did NOT click last run
     winning_variant_info: dict               # Best variant's subject/tone/click_rate
+    all_emailed_customer_ids: List[str]      # Cumulative IDs emailed across all iterations
