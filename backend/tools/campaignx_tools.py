@@ -281,7 +281,8 @@ class GetCohortInput(BaseModel):
 
 
 class SendCampaignInput(BaseModel):
-    subject: str = Field(
+    subject: str | None = Field(
+        default=None,
         description="Email subject line. Plain English text only. Max 200 chars."
     )
     body: str = Field(
@@ -353,7 +354,7 @@ def tool_get_customer_cohort(reason: str) -> dict:
 
 
 def tool_send_campaign(
-    subject: str,
+    subject: str | None,
     body: str,
     list_customer_ids: list[str],
     send_time: str
@@ -386,13 +387,16 @@ def tool_send_campaign(
     max_body_len = int(body_schema.get("maxLength", 5000))
     max_subject_len = int(subject_schema.get("maxLength", 200))
 
+    if len(body) < 1:
+        return {"error": "Body must be at least 1 character (spec minimum)"}
+
     if len(body) > max_body_len:
         return {
             "error": f"Body exceeds spec limit of {max_body_len} characters",
             "current_length": len(body)
         }
 
-    if len(subject) > max_subject_len:
+    if subject and len(subject) > max_subject_len:
         return {
             "error": f"Subject exceeds spec limit of {max_subject_len} characters",
             "current_length": len(subject)
@@ -405,11 +409,12 @@ def tool_send_campaign(
 
     # Build payload dynamically from spec required fields
     payload = {
-        "subject": subject,
         "body": body,
         "list_customer_ids": list_customer_ids,
         "send_time": send_time
     }
+    if subject:
+        payload["subject"] = subject
 
     print(f"[Dynamic Tool] Payload: {json.dumps({**payload, 'list_customer_ids': f'[{len(list_customer_ids)} customers]'})}")
 
