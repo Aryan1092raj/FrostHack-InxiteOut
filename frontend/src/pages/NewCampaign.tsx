@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { startCampaign } from "../lib/api"
+import { startCampaign, BASE_URL } from "../lib/api"
 
 interface AgentEvent { agent: string; message: string; type: string }
 
@@ -41,8 +41,7 @@ export default function NewCampaign() {
   }, [replanId])
 
   const connect = (id: string) => {
-    const base = import.meta.env.VITE_API_URL || "http://localhost:8000"
-    const es = new EventSource(`${base}/api/campaign/${id}/stream`)
+    const es = new EventSource(`${BASE_URL}/api/campaign/${id}/stream`)
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data)

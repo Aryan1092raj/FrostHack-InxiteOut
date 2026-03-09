@@ -6,7 +6,7 @@ from datetime import datetime
 # ─── Campaign Schemas ─────────────────────────────────────────────────────────
 
 class Strategy(BaseModel):
-    segments: List[List[str]]           # [[CUST001, CUST002], [CUST003]]
+    segments: List[Any]                 # list of segment dicts with name, customer_ids, targeting_rationale, etc.
     send_times: List[str]               # ["03:03:26 09:00:00", ...]
     ab_variants: List[str]              # ["variant_a", "variant_b"]
     rationale: Optional[str] = None     # Why this strategy was chosen

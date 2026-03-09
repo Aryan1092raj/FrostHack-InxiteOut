@@ -21,6 +21,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   monitoring:        { label: "Monitoring",      cls: "badge-monitoring" },
   optimizing:        { label: "Optimizing",      cls: "badge-optimizing" },
   done:              { label: "Complete",        cls: "badge-done" },
+  stopped:           { label: "Stopped",         cls: "badge-stopped" },
   error:             { label: "Error",           cls: "badge-error" },
 }
 

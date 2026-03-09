@@ -18,7 +18,6 @@ ENV/
 **/__pycache__/
 *.py[cod]
 *$py.class
-pyrightconfig.json
 
 # Backend data
 backend/.env

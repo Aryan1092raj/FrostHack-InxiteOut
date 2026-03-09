@@ -73,7 +73,7 @@ export default function Analysis() {
   const radarData = [
     { metric: "Open Rate", value: +avgOpen.toFixed(1), full: 100 },
     { metric: "Click Rate", value: +avgClick.toFixed(1), full: 100 },
-    { metric: "Coverage", value: done.length > 0 ? Math.min(100, totalSent / 50) : 0, full: 100 },
+    { metric: "Coverage", value: done.length > 0 ? Math.min(100, totalSent / 50) : 0, full: 100 }, // 100% = 5000 emails (full cohort size)
     { metric: "Iterations", value: Math.min(100, avgIter * 25), full: 100 },
     { metric: "Completion", value: done.length > 0 ? (done.length / campaigns.length) * 100 : 0, full: 100 },
   ]

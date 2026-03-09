@@ -115,8 +115,8 @@ export default function Reports() {
               #{id!.slice(0, 8)} · {reports.length} optimization cycle{reports.length !== 1 ? "s" : ""} completed
             </p>
           </div>
-          <span className={`badge badge-${campaign.status}`} style={{ marginTop: 6 }}>
-            {campaign.status?.replace("_", " ")}
+          <span className={`badge badge-${campaign.status.replace("awaiting_approval", "awaiting")}`} style={{ marginTop: 6 }}>
+            {campaign.status?.replace(/_/g, " ")}
           </span>
         </div>
       </div>

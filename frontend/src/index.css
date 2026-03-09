@@ -149,6 +149,7 @@ body::after {
 .badge-optimizing { background: rgba(251,146,60,0.1); color: var(--orange); border: 1px solid rgba(251,146,60,0.2); }
 .badge-done       { background: rgba(139,156,200,0.08); color: var(--t2); border: 1px solid var(--border); }
 .badge-error      { background: rgba(248,113,113,0.1); color: var(--red); border: 1px solid rgba(248,113,113,0.2); }
+.badge-stopped    { background: rgba(107,114,128,0.1); color: #9ca3af; border: 1px solid rgba(107,114,128,0.2); }
 
 /* ─── INPUTS ─── */
 .input {

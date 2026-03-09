@@ -20,6 +20,7 @@ const STATUS: Record<string, { label: string; cls: string; icon: string }> = {
   monitoring:        { label: "Monitoring",      cls: "badge-monitoring", icon: "◐" },
   optimizing:        { label: "Optimizing",      cls: "badge-optimizing", icon: "⟳" },
   done:              { label: "Complete",        cls: "badge-done",       icon: "✓" },
+  stopped:           { label: "Stopped",         cls: "badge-stopped",    icon: "■" },
   error:             { label: "Error",           cls: "badge-error",      icon: "✕" },
 }
 
@@ -41,7 +42,7 @@ export default function History() {
     getCampaigns().then(d => { setCampaigns((d as Campaign[]).reverse()); setLoading(false) })
   }, [])
 
-  const statuses = ["all", "done", "awaiting_approval", "optimizing", "error"]
+  const statuses = ["all", "done", "awaiting_approval", "optimizing", "stopped", "error"]
   const filtered = filter === "all" ? campaigns : campaigns.filter(c => c.status === filter)
 
   return (

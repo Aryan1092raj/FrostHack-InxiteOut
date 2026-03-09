@@ -1,0 +1,13 @@
+{
+    "root": ".",
+    "pythonVersion": "3.12",
+    "venvPath": ".",
+    "venv": "venv",
+    "extraPaths": [
+        "."
+    ],
+    "reportMissingImports": "warning",
+    "reportMissingModuleSource": "none",
+    "reportGeneralTypeIssues": "warning",
+    "typeCheckingMode": "basic"
+}

@@ -8,7 +8,7 @@
 // DAY 6: You'll swap mock data for real fetch() calls
 // =====================================================
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
+export const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"
 
 // ---------------------------
 // Get all campaigns
@@ -19,7 +19,9 @@ export const getCampaigns = async () => {
   const data = await res.json()
   return (data.campaigns || []).map((c: any) => ({
     ...c,
-    metrics: c.metrics || { open_rate: 0, click_rate: 0, total_sent: 0 }
+    metrics: c.metrics || { open_rate: 0, click_rate: 0, total_sent: 0 },
+    strategy: c.strategy || null,
+    emails: c.emails || [],
   }))
 }
 
@@ -28,6 +30,7 @@ export const getCampaigns = async () => {
 // ---------------------------
 export const getCampaign = async (id: string) => {
   const res = await fetch(`${BASE_URL}/api/campaign/${id}`)
+  if (!res.ok) return null
   return res.json()
 }
 
@@ -50,6 +53,7 @@ export const approveCampaign = async (id: string) => {
   const res = await fetch(`${BASE_URL}/api/campaign/${id}/approve`, {
     method: "POST"
   })
+  if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
 
@@ -62,14 +66,7 @@ export const rejectCampaign = async (id: string, note: string) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: note })
   })
-  return res.json()
-}
-
-// ---------------------------
-// Get performance report
-// ---------------------------
-export const getCampaignReport = async (id: string) => {
-  const res = await fetch(`${BASE_URL}/api/campaign/${id}/report`)
+  if (!res.ok) throw new Error(await res.text())
   return res.json()
 }
 
@@ -78,6 +75,7 @@ export const getCampaignReport = async (id: string) => {
 // ---------------------------
 export const getCampaignReports = async (id: string) => {
   const res = await fetch(`${BASE_URL}/api/campaign/${id}/reports`)
+  if (!res.ok) return []
   const data = await res.json()
   return data.reports || []
 }

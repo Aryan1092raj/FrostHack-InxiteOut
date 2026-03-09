@@ -29,14 +29,22 @@ export default function ApprovalScreen() {
 
   const handleApprove = async () => {
     setApproving(true)
-    await approveCampaign(id!)
-    navigate(`/reports/${id}`)
+    try {
+      await approveCampaign(id!)
+      navigate(`/reports/${id}`)
+    } catch {
+      setApproving(false)
+    }
   }
 
   const handleReject = async () => {
     setRejecting(true)
-    await rejectCampaign(id!, rejectNote)
-    navigate(`/new?campaign_id=${id}&note=${encodeURIComponent(rejectNote)}`)
+    try {
+      await rejectCampaign(id!, rejectNote)
+      navigate(`/new?campaign_id=${id}&note=${encodeURIComponent(rejectNote)}`)
+    } catch {
+      setRejecting(false)
+    }
   }
 
   const variantColors = ["var(--gold)", "var(--teal)", "var(--purple)", "var(--orange)"]
