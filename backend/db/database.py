@@ -55,11 +55,21 @@ def init_db():
             open_rate REAL DEFAULT 0.0,
             click_rate REAL DEFAULT 0.0,
             total_sent INTEGER DEFAULT 0,
+            opens INTEGER DEFAULT 0,
+            clicks INTEGER DEFAULT 0,
             raw_report TEXT,            -- full JSON from CampaignX API
             fetched_at TEXT NOT NULL,
             FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
         )
     """)
+
+    # Migration: add opens/clicks columns if they don't exist (idempotent)
+    for col in ["opens INTEGER DEFAULT 0", "clicks INTEGER DEFAULT 0"]:
+        col_name = col.split()[0]
+        try:
+            cursor.execute(f"ALTER TABLE reports ADD COLUMN {col}")
+        except Exception:
+            pass  # column already exists
 
     # ── Rate Limit Tracker ───────────────────────────────────────────────────
     cursor.execute("""
@@ -218,13 +228,16 @@ def save_report(campaign_id: str, external_id: str, open_rate: float,
                 click_rate: float, total_sent: int, raw_report: dict):
     conn = get_connection()
     now = datetime.utcnow().isoformat()
+    computed = raw_report.get("computed_metrics", {})
+    opens = computed.get("opens", round((open_rate or 0) * (total_sent or 0)))
+    clicks = computed.get("clicks", round((click_rate or 0) * (total_sent or 0)))
     conn.execute("""
         INSERT INTO reports
         (campaign_id, external_campaign_id, open_rate, click_rate,
-         total_sent, raw_report, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+         total_sent, opens, clicks, raw_report, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (campaign_id, external_id, open_rate, click_rate,
-          total_sent, json.dumps(raw_report), now))
+          total_sent, opens, clicks, json.dumps(raw_report), now))
     conn.commit()
     conn.close()
 
@@ -262,6 +275,20 @@ def get_reports_by_external_ids(external_ids: List[str]) -> List[Dict[str, Any]]
         result.append(d)
     return result
 
+def get_all_reports_for_campaign(campaign_id: str) -> List[Dict[str, Any]]:
+    """Fetch ALL saved reports for a campaign across all iterations.
+    Used by monitor to compute cumulative open/click rates."""
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT external_campaign_id, open_rate, click_rate,
+                  total_sent, opens, clicks
+           FROM reports
+           WHERE campaign_id = ?
+           ORDER BY fetched_at ASC""",
+        (campaign_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # ─── Rate Limit Tracker ───────────────────────────────────────────────────────
 
