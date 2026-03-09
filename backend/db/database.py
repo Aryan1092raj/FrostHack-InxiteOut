@@ -243,6 +243,26 @@ def get_report(campaign_id: str) -> Optional[Dict[str, Any]]:
     return d
 
 
+def get_reports_by_external_ids(external_ids: List[str]) -> List[Dict[str, Any]]:
+    """Fetch raw per-customer report rows for a list of external campaign IDs."""
+    if not external_ids:
+        return []
+    conn = get_connection()
+    placeholders = ",".join("?" * len(external_ids))
+    rows = conn.execute(
+        f"SELECT external_campaign_id, raw_report FROM reports "
+        f"WHERE external_campaign_id IN ({placeholders})",
+        external_ids
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        d: Dict[str, Any] = dict(row)
+        d["raw_report"] = json.loads(d["raw_report"]) if d["raw_report"] else {}
+        result.append(d)
+    return result
+
+
 # ─── Rate Limit Tracker ───────────────────────────────────────────────────────
 
 def check_and_increment_rate_limit(endpoint: str, max_calls: int = 100) -> bool:

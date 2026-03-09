@@ -11,6 +11,8 @@ async def content_gen_node(state: CampaignState) -> dict:
     segments = state["segments"]
     strategy = state["strategy"]
     rejection_reason = state.get("rejection_reason", "")
+    iteration = state.get("iteration", 1)
+    winning_variant_info: dict = state.get("winning_variant_info", {})
 
     await emit(campaign_id, "content_gen", "agent_thought",
                "Generating email content for each A/B variant...")
@@ -29,16 +31,24 @@ async def content_gen_node(state: CampaignState) -> dict:
         include_emoji = variant.get("include_emoji", False)
         send_time = variant["send_time"]
         segment_ids = variant.get("segment_ids", [])
+        direct_customer_ids: list = variant.get("direct_customer_ids", [])
 
-        # Collect customer IDs for this variant
-        customer_ids = []
-        segment_descriptions = []
-        for sid in segment_ids:
-            seg = segment_map.get(sid, {})
-            customer_ids.extend(seg.get("customer_ids", []))
-            segment_descriptions.append(
-                f"{seg.get('name', sid)}: {seg.get('description', '')}"
-            )
+        # Rescue mode: strategist already resolved exact customer IDs to target
+        if direct_customer_ids:
+            customer_ids = direct_customer_ids
+            segment_descriptions = [
+                f"Rescue pool ({len(direct_customer_ids)} non-clickers from last iteration)"
+            ]
+        else:
+            # Standard mode: collect customer IDs from segment map
+            customer_ids = []
+            segment_descriptions = []
+            for sid in segment_ids:
+                seg = segment_map.get(sid, {})
+                customer_ids.extend(seg.get("customer_ids", []))
+                segment_descriptions.append(
+                    f"{seg.get('name', sid)}: {seg.get('description', '')}"
+                )
 
         if not customer_ids:
             await emit(campaign_id, "content_gen", "agent_thought",
@@ -106,7 +116,8 @@ Return ONLY this JSON:
                 "customer_ids": customer_ids,
                 "send_time": send_time,
                 "tone": tone,
-                "segment_ids": segment_ids
+                "segment_ids": segment_ids,
+                "direct_customer_ids": direct_customer_ids
             })
 
         except Exception as e:
@@ -132,7 +143,8 @@ Return ONLY this JSON:
                 "customer_ids": customer_ids,
                 "send_time": send_time,
                 "tone": tone,
-                "segment_ids": segment_ids
+                "segment_ids": segment_ids,
+                "direct_customer_ids": direct_customer_ids
             })
 
     await emit(campaign_id, "content_gen", "agent_thought",

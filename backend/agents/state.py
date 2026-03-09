@@ -14,3 +14,5 @@ class CampaignState(TypedDict):
     rejection_reason: Optional[str]  # Set if human rejects
     optimization_notes: str          # Passed from optimizer to strategist
     status: str                      # Current pipeline status
+    underperforming_customer_ids: List[str]  # Customers who did NOT click last run
+    winning_variant_info: dict               # Best variant's subject/tone/click_rate
