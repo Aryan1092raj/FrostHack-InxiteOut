@@ -51,6 +51,8 @@ async def optimizer_node(state: CampaignState) -> dict:
 
     # ── Find customers who did NOT click (underperformers) ────────────────────
     underperforming_customer_ids: list = []
+    # Permanent converter set — EC=Y ever means never re-target (scoring safety)
+    all_converted: set = set(state.get("all_converted_customer_ids", []))
     try:
         raw_reports = get_reports_by_external_ids(external_ids)
         customer_ec: dict = {}
@@ -59,6 +61,10 @@ async def optimizer_node(state: CampaignState) -> dict:
                 cid = row.get("customer_id")
                 if cid:
                     customer_ec[cid] = row.get("EC", "N")
+
+        # Accumulate new converters from this iteration
+        converters_this_iter = {cid for cid, v in customer_ec.items() if v == "Y"}
+        all_converted = all_converted | converters_this_iter
 
         all_sent: list = []
         for email in emails:
@@ -73,12 +79,16 @@ async def optimizer_node(state: CampaignState) -> dict:
                 unique_sent.append(cid)
 
         underperforming_customer_ids = [
-            cid for cid in unique_sent if customer_ec.get(cid, "N") == "N"
+            cid for cid in unique_sent
+            if customer_ec.get(cid, "N") == "N" and cid not in all_converted
         ]
         converted = len(unique_sent) - len(underperforming_customer_ids)
         await emit(campaign_id, "optimizer", "agent_thought",
                    f"🎯 {len(underperforming_customer_ids)} non-clickers identified "
                    f"({converted} already converted — will NOT be re-sent to).")
+        await emit(campaign_id, "optimizer", "agent_thought",
+                   f"🔒 {len(all_converted)} confirmed converters permanently excluded "
+                   f"(re-send would risk their EC=Y score).")
     except Exception as e:
         await emit(campaign_id, "optimizer", "agent_thought",
                    f"⚠️ Could not compute underperformers: {str(e)[:60]}. Will use full cohort.")
@@ -86,7 +96,8 @@ async def optimizer_node(state: CampaignState) -> dict:
     # ── Cohort coverage check ─────────────────────────────────────────────────
     all_customer_ids = set(c["customer_id"] for c in state.get("customers", []))
     all_emailed = set(state.get("all_emailed_customer_ids", []))
-    uncovered = all_customer_ids - all_emailed
+    # Exclude confirmed converters from uncovered pool (re-send risks their score)
+    uncovered = all_customer_ids - all_emailed - all_converted
     coverage_note = ""
 
     if uncovered:
@@ -107,6 +118,7 @@ async def optimizer_node(state: CampaignState) -> dict:
     base_return = {
         "winning_variant_info": winning_variant_info,
         "underperforming_customer_ids": underperforming_customer_ids,
+        "all_converted_customer_ids": list(all_converted),
     }
 
     # Check if we should stop

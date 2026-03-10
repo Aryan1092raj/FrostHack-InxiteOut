@@ -6,10 +6,42 @@ Content Gen — Updated to use:
 """
 
 import json
+import random
 from agents.state import CampaignState
 from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 XDEPOSIT_URL = "https://superbfsi.com/xdeposit/explore/"
+
+# ── Seed templates — LLM improves on these, not a blank page ─────────────────
+FALLBACK_TEMPLATES = [
+    {
+        "subject": "Your FD is earning 1% less than it should 💰",
+        "body": (
+            f"Hi,\n\n"
+            f"Your fixed deposit could be working harder for you.\n\n"
+            f"XDeposit from SuperBFSI gives you <b>1% higher returns</b> than most "
+            f"competitors \u2014 that\u2019s \u20b91,000 extra per year on every \u20b91 lakh deposited.\n\n"
+            f"Senior women get an <b>additional 0.25%</b> on top.\n\n"
+            f"\ud83d\udc49 <a href=\"{XDEPOSIT_URL}\">See what XDeposit pays you</a>\n\n"
+            f"No lock-in surprises. RBI-regulated. Trusted by thousands.\n\n"
+            f"\ud83d\udc49 {XDEPOSIT_URL}\n\n"
+            f"\u2014 SuperBFSI Team"
+        ),
+    },
+    {
+        "subject": "Is your money earning what it deserves?",
+        "body": (
+            f"Hi,\n\n"
+            f"Most FDs pay the same rate they did years ago.\n\n"
+            f"XDeposit pays <b>1 percentage point more</b> \u2014 and for senior women, "
+            f"an extra 0.25% on top of that.\n\n"
+            f"Simple math: more return, same safety, same bank guarantee.\n\n"
+            f"\ud83d\udc49 <a href=\"{XDEPOSIT_URL}\">Calculate your XDeposit earnings</a>\n\n"
+            f"\ud83d\udc49 {XDEPOSIT_URL}\n\n"
+            f"\u2014 SuperBFSI"
+        ),
+    },
+]
 
 
 async def content_gen_node(state: CampaignState) -> dict:
@@ -115,7 +147,15 @@ async def content_gen_node(state: CampaignState) -> dict:
                 + "\n".join(f"  • {a}" for a in occupation_angles)
                 + "\n"
             )
-
+        # ── Seed template to anchor LLM output ─────────────────────────────
+        # Pick the template most relevant to this segment (special offer = template 0)
+        seed_tmpl = FALLBACK_TEMPLATES[0] if has_special_offer else FALLBACK_TEMPLATES[1]
+        seed_block = (
+            f"\n\ud83c\udfaf SEED TEMPLATE (improve on this — do NOT copy verbatim):\n"
+            f"  Subject: \"{seed_tmpl['subject']}\"\n"
+            f"  Body excerpt: \"{seed_tmpl['body'][:200]}...\"\n"
+            f"  Your output MUST be more specific, more personalised, and stronger CTA.\n"
+        )
         # Innovation #1: Thompson winner context
         thompson_block = ""
         if thompson_winner and iteration == 1:
@@ -145,6 +185,7 @@ Target Segments:
 {chr(10).join(seg_descriptions)}
 {special_offer_block}
 {occupation_block}
+{seed_block}
 {thompson_block}
 
 Variant Style:
@@ -182,17 +223,9 @@ Return ONLY valid JSON (no markdown, no backticks):
         except Exception as e:
             await emit(campaign_id, "content_gen", "agent_thought",
                        f"⚠️  Content fallback for {variant_id}: {str(e)[:80]}")
-            subject = f"XDeposit — Earn 1% More with SuperBFSI"
-            body    = (
-                f"Dear Customer,\n\n"
-                f"We're excited to introduce **XDeposit**, SuperBFSI's flagship term deposit "
-                f"giving you **1% higher returns** than competitors.\n\n"
-                f"👉 Explore XDeposit: {XDEPOSIT_URL}\n\n"
-                f"🌟 Female senior citizens get an **additional 0.25%** bonus rate!\n\n"
-                f"**Your savings deserve better.** Start today.\n\n"
-                f"👉 {XDEPOSIT_URL}\n\n"
-                f"Warm regards,\nSuperBFSI Team"
-            )
+            tmpl   = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
+            subject = tmpl["subject"]
+            body    = tmpl["body"]
 
         emails.append({
             "variant":      variant_id,

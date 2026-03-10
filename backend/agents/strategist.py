@@ -119,6 +119,8 @@ Design an A/B testing strategy to MAXIMISE click rate (weighted 70% in scoring).
 
 Rules:
 - Create exactly 2 A/B variants (variant_a and variant_b)
+- Segment A = Female Senior Citizens (unique 0.25% bonus — lead with this)
+- Segment B = General Audience (1% higher returns — clear value proposition)
 - MUST cover ALL segments — assign every segment_id to at least one variant
 - Choose DIFFERENT send times for each variant
 - BANNED: Do NOT use urgency, scarcity, or FOMO tones — the API penalizes this

@@ -19,6 +19,7 @@ class CampaignState(TypedDict):
     underperforming_customer_ids: List[str]    # Customers who did NOT click last run
     winning_variant_info:     dict             # Best variant's subject/tone/click_rate
     all_emailed_customer_ids: List[str]        # Cumulative IDs emailed across all iterations
+    all_converted_customer_ids: List[str]      # EC=Y across ALL iterations — NEVER re-target these
 
     # ── Innovation #1: Thompson Sampling / Probe → Exploit ────────────────────
     probe_results:            List[dict]       # [{probe_id, subject, body, click_rate, open_rate, dna}]

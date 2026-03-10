@@ -368,19 +368,42 @@ async def probe_executor_node(state: CampaignState) -> dict:
         probed_ids = [cid for p in probe_configs for cid in p["customer_ids"]]
         new_all_emailed = list(all_emailed) + probed_ids
 
+        # Build permanent converter set from probe results (EC=Y → never re-target)
+        probe_converted_ids: list[str] = []
+        for probe in probe_configs:
+            pid    = probe["probe_id"]
+            ext_id = probe_ext_ids.get(pid)
+            if not ext_id:
+                continue
+            # Re-use already-fetched report data via probe_results lookup
+            rpt_result = next((r for r in probe_results if r["probe_id"] == pid), None)
+            if rpt_result:
+                # Fetch the raw row-level data to get per-customer EC
+                raw_report = tool_get_report(ext_id)
+                for row in raw_report.get("data", []):
+                    if row.get("EC") == "Y":
+                        cid = row.get("customer_id")
+                        if cid:
+                            probe_converted_ids.append(cid)
+
+        if probe_converted_ids:
+            await emit(campaign_id, "probe_executor", "agent_thought",
+                       f"🔒 {len(probe_converted_ids)} probe converters (EC=Y) permanently excluded from future sends.")
+
         await emit(campaign_id, "probe_executor", "agent_thought",
                    f"✅ Probe phase complete. "
                    f"{len(probed_ids)} probed + {len(main_pool)} reserved for main send.")
 
         return {
-            "probe_results":            probe_results,
-            "thompson_winner":          winner,
-            "email_dna_signal":         email_dna_signal,
-            "winning_dna":              winning_dna,
-            "dna_content_rules":        dna_rules,
-            "main_pool_customer_ids":   main_pool,
-            "status":                   "probe_done",
-            "all_emailed_customer_ids": new_all_emailed,
+            "probe_results":              probe_results,
+            "thompson_winner":            winner,
+            "email_dna_signal":           email_dna_signal,
+            "winning_dna":                winning_dna,
+            "dna_content_rules":          dna_rules,
+            "main_pool_customer_ids":     main_pool,
+            "status":                     "probe_done",
+            "all_emailed_customer_ids":   new_all_emailed,
+            "all_converted_customer_ids": probe_converted_ids,
         }
 
     except Exception as e:

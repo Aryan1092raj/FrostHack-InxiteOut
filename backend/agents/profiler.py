@@ -115,13 +115,9 @@ def smartsplit_customers(customers: list) -> list[dict]:
     Returns list of segment dicts — each with real customer_ids, not random slices.
     """
 
-    # ── Pass 1: Demographic buckets ───────────────────────────────────────────
+    # ── Pass 1: Demographic buckets (2 segments for max sample size per group) ──
     bucket_ids: dict[str, list[str]] = {
         "female_senior":  [],
-        "senior_male":    [],
-        "young_digital":  [],
-        "high_income":    [],
-        "inactive":       [],
         "general":        [],
     }
     assigned: set[str] = set()
@@ -133,43 +129,7 @@ def smartsplit_customers(customers: list) -> list[dict]:
             bucket_ids["female_senior"].append(cid)
             assigned.add(cid)
 
-    # Senior males
-    for c in customers:
-        cid = c["customer_id"]
-        if cid in assigned:
-            continue
-        if _age(c) >= 55:
-            bucket_ids["senior_male"].append(cid)
-            assigned.add(cid)
-
-    # Young digital natives
-    for c in customers:
-        cid = c["customer_id"]
-        if cid in assigned:
-            continue
-        if _age(c) < 35 and _is_digital(c):
-            bucket_ids["young_digital"].append(cid)
-            assigned.add(cid)
-
-    # High income (₹50k+ / month)
-    for c in customers:
-        cid = c["customer_id"]
-        if cid in assigned:
-            continue
-        if _income(c) >= 50000:
-            bucket_ids["high_income"].append(cid)
-            assigned.add(cid)
-
-    # Inactive / lapsed (brief: never skip them)
-    for c in customers:
-        cid = c["customer_id"]
-        if cid in assigned:
-            continue
-        if _is_inactive(c):
-            bucket_ids["inactive"].append(cid)
-            assigned.add(cid)
-
-    # General remainder
+    # Everyone else goes into the general bucket
     for c in customers:
         cid = c["customer_id"]
         if cid not in assigned:
@@ -185,34 +145,6 @@ def smartsplit_customers(customers: list) -> list[dict]:
             "optimal_send_time": "morning",
             "special_offer": True,
             "key_angle": "Exclusive 1.25% higher returns — unique bonus they get",
-        },
-        "senior_male": {
-            "name": "Senior Males",
-            "tone": "professional, trust-building, retirement-focused",
-            "optimal_send_time": "morning",
-            "special_offer": False,
-            "key_angle": "Retirement security with 1% better returns",
-        },
-        "young_digital": {
-            "name": "Young Digital Natives",
-            "tone": "aspirational, modern, emoji-forward",
-            "optimal_send_time": "evening",
-            "special_offer": False,
-            "key_angle": "Start compounding now — 1% extra makes a big long-term difference",
-        },
-        "high_income": {
-            "name": "High Income Professionals",
-            "tone": "premium, analytical, wealth-focused",
-            "optimal_send_time": "afternoon",
-            "special_offer": False,
-            "key_angle": "High earners deserve high returns — XDeposit is the smart choice",
-        },
-        "inactive": {
-            "name": "Inactive Customers",
-            "tone": "warm, low-pressure, re-engagement",
-            "optimal_send_time": "evening",
-            "special_offer": False,
-            "key_angle": "We have something new — zero pressure, just better returns",
         },
         "general": {
             "name": "General Audience",
