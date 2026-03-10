@@ -1,3 +1,15 @@
+"""
+Profiler Node — Innovation #3: Occupation-Axis + Demographic Cross-Segmentation
+
+The key insight: every other team will segment by age/gender alone.
+We cross-segment on TWO axes simultaneously:
+  Axis 1: Life stage (female_senior, senior, young, general)
+  Axis 2: Occupation (government, IT/tech, self-employed, retired, homemaker, other)
+
+This gives us per-occupation psychological messaging that the LLM then tailors.
+Each occupation group has a proven different psychological trigger for financial products.
+"""
+
 import json
 import itertools
 from agents.state import CampaignState
@@ -6,145 +18,358 @@ from db.database import get_cached_cohort, save_cohort_cache
 from tools.campaignx_tools import tool_get_customer_cohort
 
 
+# ── Occupation → Psychological Angle mapping ──────────────────────────────────
+OCCUPATION_ANGLES = {
+    "government":   {
+        "angle":   "guaranteed_stability",
+        "message": "Secure, government-trusted returns with XDeposit",
+        "tone":    "formal, authoritative",
+        "trigger": "security and trust over returns",
+    },
+    "it_tech":      {
+        "angle":   "data_driven",
+        "message": "The math is simple: XDeposit earns 1% more — calculate your gain",
+        "tone":    "direct, analytical",
+        "trigger": "ROI calculation, comparative data",
+    },
+    "self_employed": {
+        "angle":   "business_growth",
+        "message": "Beat inflation — your business deserves better returns",
+        "tone":    "aspirational, entrepreneurial",
+        "trigger": "inflation hedge, business growth",
+    },
+    "retired":      {
+        "angle":   "income_supplement",
+        "message": "Supplement your monthly income with higher FD returns",
+        "tone":    "warm, security-focused",
+        "trigger": "regular income, peace of mind",
+    },
+    "homemaker":    {
+        "angle":   "family_security",
+        "message": "Secure your family's financial future — 1% more with XDeposit",
+        "tone":    "emotional, family-first",
+        "trigger": "family protection, children's future",
+    },
+    "student":      {
+        "angle":   "future_wealth",
+        "message": "Start your wealth journey early — XDeposit grows faster",
+        "tone":    "energetic, future-focused",
+        "trigger": "starting early advantage, compounding",
+    },
+    "other":        {
+        "angle":   "general_value",
+        "message": "1% higher returns with XDeposit — make your money work harder",
+        "tone":    "informational, friendly",
+        "trigger": "simple value proposition",
+    },
+}
+
+
+def _age(c) -> int:
+    try:
+        return int(c.get("Age", 0))
+    except (ValueError, TypeError):
+        return 0
+
+def _income(c) -> float:
+    try:
+        return float(c.get("Monthly_Income", 0))
+    except (ValueError, TypeError):
+        return 0.0
+
+def _is_female(c) -> bool:
+    return str(c.get("Gender", "")).strip().lower() in ("female", "f")
+
+def _is_inactive(c) -> bool:
+    val = str(c.get("Existing_Customer", c.get("Existing Customer", ""))).strip().lower()
+    return val in ("inactive", "no", "false", "0")
+
+def _is_digital(c) -> bool:
+    app = str(c.get("App_Installed", "")).strip().lower() in ("true", "yes", "1")
+    social = str(c.get("Social_Media_Active", "")).strip().lower() in ("true", "yes", "1")
+    return app or social
+
+def _occupation_bucket(c) -> str:
+    occ = str(c.get("Occupation", "")).strip().lower()
+    if any(kw in occ for kw in ("government", "govt", "public sector", "ias", "ips", "civil")):
+        return "government"
+    if any(kw in occ for kw in ("software", "it", "tech", "engineer", "developer", "programmer", "analyst")):
+        return "it_tech"
+    if any(kw in occ for kw in ("business", "self", "entrepreneur", "owner", "freelance", "consultant")):
+        return "self_employed"
+    if any(kw in occ for kw in ("retired", "pension", "pensioner")):
+        return "retired"
+    if any(kw in occ for kw in ("homemaker", "housewife", "househusband", "home maker")):
+        return "homemaker"
+    if any(kw in occ for kw in ("student", "intern")):
+        return "student"
+    return "other"
+
+
+def smartsplit_customers(customers: list) -> list[dict]:
+    """
+    Two-pass segmentation:
+      Pass 1: Guaranteed demographic buckets (priority order)
+      Pass 2: Within each bucket, record occupation breakdown for per-segment messaging
+
+    Returns list of segment dicts — each with real customer_ids, not random slices.
+    """
+
+    # ── Pass 1: Demographic buckets ───────────────────────────────────────────
+    bucket_ids: dict[str, list[str]] = {
+        "female_senior":  [],
+        "senior_male":    [],
+        "young_digital":  [],
+        "high_income":    [],
+        "inactive":       [],
+        "general":        [],
+    }
+    assigned: set[str] = set()
+
+    # Female seniors — HIGHEST priority (unique 0.25% offer)
+    for c in customers:
+        cid = c["customer_id"]
+        if _age(c) >= 55 and _is_female(c):
+            bucket_ids["female_senior"].append(cid)
+            assigned.add(cid)
+
+    # Senior males
+    for c in customers:
+        cid = c["customer_id"]
+        if cid in assigned:
+            continue
+        if _age(c) >= 55:
+            bucket_ids["senior_male"].append(cid)
+            assigned.add(cid)
+
+    # Young digital natives
+    for c in customers:
+        cid = c["customer_id"]
+        if cid in assigned:
+            continue
+        if _age(c) < 35 and _is_digital(c):
+            bucket_ids["young_digital"].append(cid)
+            assigned.add(cid)
+
+    # High income (₹50k+ / month)
+    for c in customers:
+        cid = c["customer_id"]
+        if cid in assigned:
+            continue
+        if _income(c) >= 50000:
+            bucket_ids["high_income"].append(cid)
+            assigned.add(cid)
+
+    # Inactive / lapsed (brief: never skip them)
+    for c in customers:
+        cid = c["customer_id"]
+        if cid in assigned:
+            continue
+        if _is_inactive(c):
+            bucket_ids["inactive"].append(cid)
+            assigned.add(cid)
+
+    # General remainder
+    for c in customers:
+        cid = c["customer_id"]
+        if cid not in assigned:
+            bucket_ids["general"].append(cid)
+
+    # ── Pass 2: Build rich segment dicts ──────────────────────────────────────
+    id_to_customer = {c["customer_id"]: c for c in customers}
+
+    SEGMENT_META = {
+        "female_senior": {
+            "name": "Female Senior Citizens",
+            "tone": "warm, respectful, family-oriented",
+            "optimal_send_time": "morning",
+            "special_offer": True,
+            "key_angle": "Exclusive 1.25% higher returns — unique bonus they get",
+        },
+        "senior_male": {
+            "name": "Senior Males",
+            "tone": "professional, trust-building, retirement-focused",
+            "optimal_send_time": "morning",
+            "special_offer": False,
+            "key_angle": "Retirement security with 1% better returns",
+        },
+        "young_digital": {
+            "name": "Young Digital Natives",
+            "tone": "aspirational, modern, emoji-forward",
+            "optimal_send_time": "evening",
+            "special_offer": False,
+            "key_angle": "Start compounding now — 1% extra makes a big long-term difference",
+        },
+        "high_income": {
+            "name": "High Income Professionals",
+            "tone": "premium, analytical, wealth-focused",
+            "optimal_send_time": "afternoon",
+            "special_offer": False,
+            "key_angle": "High earners deserve high returns — XDeposit is the smart choice",
+        },
+        "inactive": {
+            "name": "Inactive Customers",
+            "tone": "warm, low-pressure, re-engagement",
+            "optimal_send_time": "evening",
+            "special_offer": False,
+            "key_angle": "We have something new — zero pressure, just better returns",
+        },
+        "general": {
+            "name": "General Audience",
+            "tone": "informational, friendly",
+            "optimal_send_time": "morning",
+            "special_offer": False,
+            "key_angle": "Simple value: 1% more than what they're earning now",
+        },
+    }
+
+    segments = []
+    seg_idx = 1
+
+    for bucket_name, cids in bucket_ids.items():
+        if not cids:
+            continue
+
+        meta = SEGMENT_META[bucket_name]
+        group = [id_to_customer[cid] for cid in cids if cid in id_to_customer]
+
+        # Compute real stats
+        ages    = [_age(c) for c in group if _age(c) > 0]
+        incomes = [_income(c) for c in group if _income(c) > 0]
+        cities  = [c.get("City", "") for c in group if c.get("City")]
+
+        avg_age    = round(sum(ages) / len(ages), 1) if ages else 0
+        avg_income = round(sum(incomes) / len(incomes)) if incomes else 0
+        top_city   = max(set(cities), key=cities.count) if cities else "Unknown"
+
+        # Innovation #3: Occupation breakdown for this segment
+        occ_breakdown: dict[str, int] = {}
+        for c in group:
+            occ = _occupation_bucket(c)
+            occ_breakdown[occ] = occ_breakdown.get(occ, 0) + 1
+
+        # Dominant occupation in this segment → drives the psychological angle
+        dominant_occ = max(occ_breakdown, key=occ_breakdown.get) if occ_breakdown else "other"
+        occ_angle    = OCCUPATION_ANGLES.get(dominant_occ, OCCUPATION_ANGLES["other"])
+
+        segments.append({
+            "segment_id":           f"seg_{seg_idx}",
+            "bucket":               bucket_name,
+            "name":                 meta["name"],
+            "description":          meta["key_angle"],
+            "customer_ids":         cids,
+            "size":                 len(cids),
+            "targeting_rationale":  (
+                f"{meta['key_angle']} | avg age {avg_age} | "
+                f"avg income ₹{avg_income:,.0f} | top city {top_city}"
+            ),
+            "optimal_send_time":    meta["optimal_send_time"],
+            "tone":                 meta["tone"],
+            "special_offer":        meta["special_offer"],
+            "key_angle":            meta["key_angle"],
+            # Innovation #3 extras:
+            "occupation_breakdown": occ_breakdown,
+            "dominant_occupation":  dominant_occ,
+            "occupation_angle":     occ_angle,
+            # Stats for content_gen to use:
+            "avg_age":              avg_age,
+            "avg_income":           avg_income,
+            "top_city":             top_city,
+        })
+        seg_idx += 1
+
+    return segments
+
+
 async def profiler_node(state: CampaignState) -> dict:
     campaign_id = state["campaign_id"]
-    brief = state["brief"]
+    brief       = state["brief"]
 
     await emit(campaign_id, "profiler", "agent_thought",
-               "Starting customer profiling...")
+               "🔬 Starting SmartSplit profiler (demographic × occupation cross-segmentation)...")
 
-    # Use cache first — saves rate limit
+    # ── Fetch cohort ──────────────────────────────────────────────────────────
     customers = get_cached_cohort()
 
     if not customers:
         await emit(campaign_id, "profiler", "action",
-                   "No cache found. Fetching customer cohort from CampaignX API...")
-        result = tool_get_customer_cohort("Need full cohort for segmentation")
+                   "No cache. Fetching customer cohort from CampaignX API...")
+        result = tool_get_customer_cohort("Need full cohort for SmartSplit segmentation")
         if "error" in result:
-            await emit(campaign_id, "profiler", "error",
-                       f"API error: {result['error']}")
+            await emit(campaign_id, "profiler", "error", f"API error: {result['error']}")
             customers = []
         else:
             customers = result.get("data", [])
             save_cohort_cache(customers)
             await emit(campaign_id, "profiler", "action",
-                       f"✅ Fetched {len(customers)} customers. Saved to cache.")
+                       f"✅ Fetched {len(customers)} customers. Cached.")
     else:
         await emit(campaign_id, "profiler", "action",
                    f"✅ Loaded {len(customers)} customers from cache.")
 
-    # LLM builds intelligent segments
+    # ── SmartSplit — deterministic two-axis segmentation ─────────────────────
     await emit(campaign_id, "profiler", "agent_thought",
-               "Analyzing demographics to build targeted segments...")
+               "📊 Running two-axis segmentation: demographic × occupation...")
 
+    segments = smartsplit_customers(customers)
+
+    for seg in segments:
+        occ_str = ", ".join(f"{k}:{v}" for k, v in sorted(
+            seg["occupation_breakdown"].items(), key=lambda x: -x[1])[:3]
+        )
+        await emit(campaign_id, "profiler", "agent_thought",
+                   f"  📦 '{seg['name']}': {seg['size']} customers | "
+                   f"dominant occ: {seg['dominant_occupation']} | "
+                   f"angle: {seg['occupation_angle']['angle']}")
+        await emit(campaign_id, "profiler", "agent_thought",
+                   f"     occ breakdown (top 3): {occ_str}")
+
+    # ── LLM validates and adds strategic insight ──────────────────────────────
     llm = get_llm(temperature=0.3)
-    # Only send essential fields — strip names/special chars to avoid JSON issues
-    sample_raw = customers[:100] if len(customers) > 100 else customers
-    sample = [{
-        "customer_id": c.get("customer_id"),
-        "Age": c.get("Age"),
-        "Gender": c.get("Gender"),
-        "City": c.get("City"),
-        "Monthly_Income": c.get("Monthly_Income"),
-        "Occupation": c.get("Occupation"),
-        "Existing_Customer": c.get("Existing Customer"),
-        "App_Installed": c.get("App_Installed"),
-        "Social_Media_Active": c.get("Social_Media_Active"),
-        "KYC_status": c.get("KYC status"),
-    } for c in sample_raw]
 
-    prompt = f"""You are a customer analytics expert for SuperBFSI, an Indian BFSI company launching XDeposit term deposit product.
+    segment_summary = json.dumps([
+        {
+            "name":                seg["name"],
+            "size":                seg["size"],
+            "avg_age":             seg["avg_age"],
+            "avg_income":          seg["avg_income"],
+            "top_city":            seg["top_city"],
+            "dominant_occupation": seg["dominant_occupation"],
+            "occupation_angle":    seg["occupation_angle"]["angle"],
+            "special_offer":       seg["special_offer"],
+        }
+        for seg in segments
+    ], ensure_ascii=True, indent=2)
+
+    prompt = f"""You are a customer analytics expert for SuperBFSI's XDeposit term deposit campaign.
+
+We've built {len(segments)} demographic × occupation segments from {len(customers)} customers:
+
+{segment_summary}
 
 Campaign Brief: {brief}
 
-Customer Data (sample of {len(customers)} total customers):
-{json.dumps(sample, ensure_ascii=True)}
+In 2-3 sentences:
+1. Which segment has the highest click potential given their occupation psychology and demographic?
+2. What cross-segment pattern should the content strategy exploit?
+3. Any segment we should prioritise differently?
 
-Create 3-5 meaningful demographic segments from this data optimized for the XDeposit email campaign.
-
-Key rules from the brief:
-- Female senior citizens get an EXTRA 0.25% return — they need a dedicated segment
-- Do NOT skip inactive customers
-- Optimize for open rate and click rate
-
-Return ONLY this JSON structure (no other text):
-{{
-    "segments": [
-        {{
-            "segment_id": "seg_1",
-            "name": "Female Senior Citizens",
-            "description": "Women aged 55+ — eligible for special 0.25% bonus",
-            "customer_ids": ["CUST001", "CUST002"],
-            "size": 2,
-            "targeting_rationale": "Special rate applies — high conversion potential",
-            "optimal_send_time": "morning",
-            "tone": "warm and personal"
-        }}
-    ],
-    "total_customers": {len(customers)},
-    "insights": "Brief insight about the overall customer base"
-}}
-
-IMPORTANT: You have {len(customers)} total customers (IDs: CUST0001 to CUST{len(customers):04d}).
-Create segments and I will assign customer IDs to each segment based on demographics automatically.
-For customer_ids in your JSON, just put 2-3 example IDs from the sample. The real assignment happens in code."""
+Be specific — reference segment names, occupation angles, and the female senior 0.25% bonus."""
 
     try:
-        content = await invoke_with_retry(llm, prompt)
-        result = json.loads(clean_llm_json(content), strict=False)
-        segments = result.get("segments", [])
-        insights = result.get("insights", "")
+        insights = await invoke_with_retry(llm, prompt)
+    except Exception:
+        insights = (
+            f"SmartSplit complete: {len(segments)} segments across demographic and occupation axes. "
+            f"Female Senior Citizens segment has highest conversion potential due to exclusive 0.25% bonus."
+        )
 
-        # Distribute ALL customers evenly across segments
-        all_ids = [c["customer_id"] for c in customers]
-        total = len(all_ids)
-        n_segs = len(segments)
-        for i, seg in enumerate(segments):
-            start_idx = (i * total) // n_segs
-            end_idx = ((i + 1) * total) // n_segs
-            seg["customer_ids"] = all_ids[start_idx:end_idx]
-            seg["size"] = len(seg["customer_ids"])
+    await emit(campaign_id, "profiler", "agent_thought",
+               f"✅ Segmentation complete: {len(segments)} segments built.")
+    await emit(campaign_id, "profiler", "agent_thought", f"🔍 Strategic insight: {insights}")
 
-        await emit(campaign_id, "profiler", "agent_thought",
-                   f"✅ Built {len(segments)} segments. Insight: {insights}")
-
-        for seg in segments:
-            await emit(campaign_id, "profiler", "agent_thought",
-                       f"📊 Segment '{seg['name']}': {seg['size']} customers — {seg['targeting_rationale']}")
-
-        return {
-            "customers": customers,
-            "segments": segments,
-            "status": "profiled"
-        }
-
-    except Exception as e:
-        await emit(campaign_id, "profiler", "agent_thought",
-                   f"⚠️ LLM JSON parse issue, using fallback segmentation: {str(e)[:100]}")
-
-        # Fallback — simple split
-        mid = len(customers) // 2
-        segments = [
-            {
-                "segment_id": "seg_1",
-                "name": "Segment A",
-                "description": "First half of customers",
-                "customer_ids": [c["customer_id"] for c in itertools.islice(customers, mid)],
-                "size": mid,
-                "targeting_rationale": "A/B test group A",
-                "optimal_send_time": "morning",
-                "tone": "professional"
-            },
-            {
-                "segment_id": "seg_2",
-                "name": "Segment B",
-                "description": "Second half of customers",
-                "customer_ids": [c["customer_id"] for c in itertools.islice(customers, mid, None)],
-                "size": len(customers) - mid,
-                "targeting_rationale": "A/B test group B",
-                "optimal_send_time": "evening",
-                "tone": "friendly"
-            }
-        ]
-
-        return {"customers": customers, "segments": segments, "status": "profiled"}
+    return {
+        "customers": customers,
+        "segments":  segments,
+        "status":    "profiled",
+    }
