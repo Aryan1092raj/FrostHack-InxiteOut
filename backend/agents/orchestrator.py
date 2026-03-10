@@ -6,7 +6,7 @@ from agents.state import CampaignState
 from agents.profiler import profiler_node
 from agents.strategist import strategist_node
 from agents.content_gen import content_gen_node
-from agents.probe_executor import probe_executor_node   # ← NEW
+from agents.probe_executor import probe_executor_node
 from agents.executor import executor_node
 from agents.monitor import monitor_node
 from agents.optimizer import optimizer_node
@@ -64,7 +64,6 @@ async def entry_router(state: CampaignState) -> dict:
 
 
 def route_from_entry(state: CampaignState) -> str:
-    # Resume after restart: skip profiler + probe (already done)
     if state.get("emails") and state["status"] in {"running", "probe_done", "probe_failed", "probe_skipped"}:
         return "executor"
     return "profiler"
@@ -72,7 +71,7 @@ def route_from_entry(state: CampaignState) -> str:
 
 def route_after_approval(state: CampaignState) -> str:
     if state["status"] == "running":
-        return "probe_executor"   # ← goes to probe first, not directly to executor
+        return "probe_executor"
     return "strategist"
 
 
@@ -84,6 +83,9 @@ def route_after_probe(state: CampaignState) -> str:
 def route_after_optimizer(state: CampaignState) -> str:
     if state["status"] == "done":
         return "end"
+    # FIX: If executor returned "error" status, stop the loop instead of retrying infinitely
+    if state["status"] == "error":
+        return "end"
     return "strategist"
 
 
@@ -92,18 +94,16 @@ def route_after_optimizer(state: CampaignState) -> str:
 def build_graph():
     workflow = StateGraph(CampaignState)
 
-    # Nodes
     workflow.add_node("entry_router",   entry_router)
     workflow.add_node("profiler",       profiler_node)
     workflow.add_node("strategist",     strategist_node)
     workflow.add_node("content_gen",    content_gen_node)
     workflow.add_node("human_approval", human_approval_node)
-    workflow.add_node("probe_executor", probe_executor_node)   # ← NEW NODE
+    workflow.add_node("probe_executor", probe_executor_node)
     workflow.add_node("executor",       executor_node)
     workflow.add_node("monitor",        monitor_node)
     workflow.add_node("optimizer",      optimizer_node)
 
-    # Entry
     workflow.set_entry_point("entry_router")
     workflow.add_conditional_edges(
         "entry_router",
@@ -111,28 +111,24 @@ def build_graph():
         {"profiler": "profiler", "executor": "executor"}
     )
 
-    # Fixed edges
-    workflow.add_edge("profiler",   "strategist")
-    workflow.add_edge("strategist", "content_gen")
-    workflow.add_edge("content_gen","human_approval")
-    workflow.add_edge("executor",   "monitor")
-    workflow.add_edge("monitor",    "optimizer")
+    workflow.add_edge("profiler",    "strategist")
+    workflow.add_edge("strategist",  "content_gen")
+    workflow.add_edge("content_gen", "human_approval")
+    workflow.add_edge("executor",    "monitor")
+    workflow.add_edge("monitor",     "optimizer")
 
-    # Conditional: after approval → probe → executor
     workflow.add_conditional_edges(
         "human_approval",
         route_after_approval,
         {"probe_executor": "probe_executor", "strategist": "strategist"}
     )
 
-    # After probe — always go to executor
     workflow.add_conditional_edges(
         "probe_executor",
         route_after_probe,
         {"executor": "executor"}
     )
 
-    # After optimizer — loop or end
     workflow.add_conditional_edges(
         "optimizer",
         route_after_optimizer,
@@ -155,30 +151,30 @@ async def run_campaign_pipeline(campaign_id: str, brief: str, resume_state: dict
             initial_state = resume_state
         else:
             initial_state: CampaignState = {
-                "campaign_id":              campaign_id,
-                "brief":                    brief,
-                "customers":                [],
-                "segments":                 [],
-                "strategy":                 {},
-                "emails":                   [],
-                "external_campaign_ids":    [],
-                "metrics":                  {},
-                "iteration":                1,
-                "max_iterations":           5,
-                "rejection_reason":         None,
-                "optimization_notes":       "",
-                "status":                   "planning",
+                "campaign_id":                campaign_id,
+                "brief":                      brief,
+                "customers":                  [],
+                "segments":                   [],
+                "strategy":                   {},
+                "emails":                     [],
+                "external_campaign_ids":      [],
+                "metrics":                    {},
+                "iteration":                  1,
+                "max_iterations":             5,
+                "rejection_reason":           None,
+                "optimization_notes":         "",
+                "status":                     "planning",
                 "underperforming_customer_ids": [],
-                "winning_variant_info":     {},
-                "all_emailed_customer_ids": [],
-                # ── Innovation fields ──────────────────────
-                "probe_results":            [],
-                "thompson_winner":          {},
-                "main_pool_customer_ids":   [],
-                "email_dna_signal":         {},
-                "winning_dna":              {},
-                "dna_content_rules":        "",
-                "api_signal_history":       [],
+                "winning_variant_info":       {},
+                "all_emailed_customer_ids":   [],
+                # Innovation fields
+                "probe_results":              [],
+                "thompson_winner":            {},
+                "main_pool_customer_ids":     [],
+                "email_dna_signal":           {},
+                "winning_dna":               {},
+                "dna_content_rules":          "",
+                "api_signal_history":         [],
             }
 
         config = {"configurable": {"thread_id": campaign_id}}
@@ -197,7 +193,11 @@ async def run_campaign_pipeline(campaign_id: str, brief: str, resume_state: dict
                    data={"campaign_id": campaign_id})
 
     except Exception as e:
-        print(f"[Orchestrator] Exception: {str(e)}")
+        # FIX: Print full traceback to Render logs so we can see exactly where it failed
+        import traceback
+        full_trace = traceback.format_exc()
+        print(f"[Orchestrator] Exception for campaign {campaign_id}:\n{full_trace}")
+
         from db.database import get_campaign
         campaign = get_campaign(campaign_id)
         if campaign and campaign.get("metrics"):
