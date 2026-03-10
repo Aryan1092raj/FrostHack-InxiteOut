@@ -12,13 +12,14 @@ WHAT IT DOES:
 WHY IT WINS:
   Standard A/B: 50% of your audience gets an untested, possibly weak email.
   Thompson + Probe: 10% pays the learning cost. 90% gets the proven winner.
-  With 5000 customers, that's 4500 people getting an email we KNOW works.
+  With 1000 customers, that's 900 people getting an email we KNOW works.
 
-RATE LIMIT MATH:
+RATE LIMIT MATH (1000-customer cohort):
   5 probe sends + 5 probe reports = 10 API calls
-  Remaining budget: ~90 calls for main iterations
-  Probe pool: ~500 customers (10%)
-  Main pool: ~4500 customers (90%)
+  Remaining budget: ~90 calls/day for main iterations
+  Probe pool: ~100 customers (10%)   ← was 500 when cohort was 5000
+  Main pool:  ~900 customers (90%)   ← was 4500 when cohort was 5000
+  Per probe:  ~20 customers          ← was ~100 when cohort was 5000
 """
 
 import asyncio
@@ -33,9 +34,12 @@ from utils.email_dna import extract_dna, compute_dna_signal, get_winning_dna, dn
 
 XDEPOSIT_URL = "https://superbfsi.com/xdeposit/explore/"
 
-PROBE_POOL_RATIO = 0.10     # 10% of cohort used for probing
-MIN_PER_PROBE    = 50       # minimum per probe variant
-MAX_PER_PROBE    = 200      # maximum per probe variant
+# ── Pool size constants — tuned for 1000-customer final round cohort ──────────
+PROBE_POOL_RATIO = 0.10   # 10% → 100 customers for probing
+MIN_PER_PROBE    = 15     # minimum customers per probe variant (was 50 for 5000 cohort)
+MAX_PER_PROBE    = 30     # maximum customers per probe variant (was 200 for 5000 cohort)
+# With 1000 customers: 100 probe / 5 templates = 20 per probe ✓ (within 15–30 range)
+# Main pool: 900 customers get the proven Thompson winner ✓
 
 # ── 5 Probe Templates — each tests a DISTINCT, independent signal dimension ──
 PROBE_TEMPLATES = [
@@ -65,70 +69,66 @@ PROBE_TEMPLATES = [
     },
     {
         "probe_id":  "probe_D_trust",
-        "dimension": "tone=trust-building | emoji=none | bold=heavy",
+        "dimension": "tone=trust-building | social_proof=yes | cta=bottom",
         "tone":      "trust-building",
-        "subject_hint": "Credibility-first subject mentioning SuperBFSI's track record",
-        "body_hint":    "Trust-building tone. No emojis. Bold key guarantees. Short punchy sentences. CTA at end.",
+        "subject_hint": "Trust/credibility signal — SuperBFSI reputation or safety of deposits",
+        "body_hint":    "Lead with SuperBFSI's credibility. Mention RBI-regulated, safe deposits. Social proof angle. CTA at end only.",
         "include_emoji": False,
     },
     {
         "probe_id":  "probe_E_special_offer",
-        "dimension": "special_offer=female_senior | cta=multiple | personalisation=high",
+        "dimension": "subject_opener=special_offer | senior_women_angle=yes | emoji=rich",
         "tone":      "warm/personal",
-        "subject_hint": "Highlight the exclusive 0.25% extra for senior women",
-        "body_hint":    "Lead with the exclusive 0.25% bonus for female senior citizens. Warm tone. Personal. URL in first and last paragraph.",
+        "subject_hint": "Mention the special 0.25% extra for senior women or a personalised offer angle",
+        "body_hint":    "Lead with the exclusive extra offer. Rich emojis (3-4). Short punchy sentences. Two CTAs — one early, one at end.",
         "include_emoji": True,
     },
 ]
 
 
 async def _generate_probe_email(llm, tmpl: dict, brief: str) -> dict:
-    """Generate a single probe email using LLM. Returns {subject, body}."""
-    prompt = f"""You are writing a probe email for a CampaignX A/B test.
+    """Ask the LLM to generate a single probe email from a template hint."""
+    emoji_rule = (
+        "Use 2-4 relevant emojis in the body." if tmpl["include_emoji"]
+        else "Use ZERO emojis — clean text only."
+    )
+    prompt = f"""You are an expert email copywriter for a financial product campaign.
 
 Campaign Brief: {brief}
+Campaign URL (MUST appear in body): {XDEPOSIT_URL}
 
-Probe ID: {tmpl['probe_id']}
-Signal Dimension: {tmpl['dimension']}
-Tone: {tmpl['tone']}
-Subject hint: {tmpl['subject_hint']}
-Body hint: {tmpl['body_hint']}
-Include emoji: {tmpl['include_emoji']}
+Generate ONE email for this probe variant:
+  Probe ID:    {tmpl['probe_id']}
+  Dimension:   {tmpl['dimension']}
+  Tone:        {tmpl['tone']}
+  Subject hint: {tmpl['subject_hint']}
+  Body hint:    {tmpl['body_hint']}
+  Emoji rule:   {emoji_rule}
 
-STRICT RULES:
-- Subject: plain English text only, max 200 chars, NO urgency/scarcity/FOMO
-- Body: English text, emojis OK if include_emoji=True, MUST include URL: {XDEPOSIT_URL}
-- Body max 5000 chars
-- Preferred tones: trust-building, aspirational, informational, warm/personal
-- BANNED tones: urgency, scarcity, FOMO
+HARD RULES:
+- Subject: 35-80 chars, English only, no markdown
+- Body: 80-250 words, must contain {XDEPOSIT_URL}
+- BANNED tones: urgency, scarcity, FOMO, pressure — these are PENALISED by the API
+- Allowed tones: trust-building, aspirational, informational, warm/personal
 
-Return ONLY this JSON (no markdown):
-{{
-    "subject": "...",
-    "body": "..."
-}}"""
+Return ONLY valid JSON:
+{{"subject": "...", "body": "..."}}"""
 
     content = await invoke_with_retry(llm, prompt)
-    result = json.loads(clean_llm_json(content))
-    subject = result.get("subject", f"Discover XDeposit — 1% More Returns")
-    body = result.get("body", f"Dear valued customer,\n\nXDeposit offers 1% higher returns.\n\n👉 {XDEPOSIT_URL}\n\nBest regards,\nSuperBFSI Team")
-
-    # Safety checks
-    if len(subject) > 200:
-        subject = subject[:197] + "..."
-    if len(body) > 5000:
-        body = body[:4990] + f"\n\n{XDEPOSIT_URL}"
-    if XDEPOSIT_URL not in body:
-        body = body + f"\n\n👉 {XDEPOSIT_URL}"
-
-    return {"subject": subject, "body": body}
+    return json.loads(clean_llm_json(content))
 
 
 async def probe_executor_node(state: CampaignState) -> dict:
     """
-    FIX: Wrapped entire function in top-level try/except.
-    Any unhandled exception (LLM failure, JSON parse, API error) now
-    falls back gracefully to probe_failed instead of crashing the pipeline.
+    Probe → Exploit node.
+
+    Updated for 1000-customer final-round cohort:
+    - Probe pool: ~100 customers (10%)
+    - Per probe:  ~20 customers (MIN_PER_PROBE=15, MAX_PER_PROBE=30)
+    - Main pool:  ~900 customers (90%)
+
+    Any unhandled exception falls back gracefully to probe_failed
+    so the pipeline continues to executor without crashing.
     """
     campaign_id  = state["campaign_id"]
     customers    = state.get("customers", [])
@@ -136,12 +136,15 @@ async def probe_executor_node(state: CampaignState) -> dict:
     iteration    = state.get("iteration", 1)
     all_emailed  = set(state.get("all_emailed_customer_ids", []))
 
-    # ── Default fallback state ─────────────────────────────────────────────────
+    # ── Default fallback ───────────────────────────────────────────────────────
     all_ids   = [c["customer_id"] for c in customers]
     available = [cid for cid in all_ids if cid not in all_emailed]
-    # Reserve 10% for probe, 90% for main
-    probe_pool_size = int(len(available) * PROBE_POOL_RATIO)
-    main_pool_fallback = available[probe_pool_size:]
+
+    # Safe fallback split: 10% probe, 90% main
+    probe_pool_size_fallback = max(len(PROBE_TEMPLATES) * MIN_PER_PROBE,
+                                   int(len(available) * PROBE_POOL_RATIO))
+    probe_pool_size_fallback = min(probe_pool_size_fallback, len(available))
+    main_pool_fallback = available[probe_pool_size_fallback:]
 
     def _fallback(reason: str) -> dict:
         return {
@@ -169,37 +172,42 @@ async def probe_executor_node(state: CampaignState) -> dict:
         return _fallback("no customers")
 
     try:
+        total_available = len(available)
         await emit(campaign_id, "probe_executor", "agent_thought",
                    "🔬 PROBE → EXPLOIT ENGINE ACTIVATED")
         await emit(campaign_id, "probe_executor", "agent_thought",
-                   "   Sending 5 micro-probes to 10% of cohort. "
-                   "Thompson Sampling will pick winner for the remaining 90%.")
+                   f"   Cohort: {total_available} customers available. "
+                   f"Sending 5 micro-probes to {PROBE_POOL_RATIO:.0%} (~{int(total_available * PROBE_POOL_RATIO)}). "
+                   f"Thompson Sampling picks winner for the remaining {1 - PROBE_POOL_RATIO:.0%}.")
 
         # ── Build probe pool ───────────────────────────────────────────────────
         random.shuffle(available)
 
+        # For 1000 customers: probe_pool_size = max(5×15, 10% of 1000) = max(75, 100) = 100
+        # Capped at 15% = 150, so final = 100
         probe_pool_size = max(
             len(PROBE_TEMPLATES) * MIN_PER_PROBE,
-            int(len(available) * PROBE_POOL_RATIO)
+            int(total_available * PROBE_POOL_RATIO)
         )
-        probe_pool_size = min(probe_pool_size, int(len(available) * 0.15))
+        probe_pool_size = min(probe_pool_size, int(total_available * 0.15))
 
         probe_pool = available[:probe_pool_size]
         main_pool  = available[probe_pool_size:]
 
+        # per_probe: evenly divide probe pool across templates, clamp to [MIN, MAX]
         per_probe = max(MIN_PER_PROBE, len(probe_pool) // len(PROBE_TEMPLATES))
         per_probe = min(per_probe, MAX_PER_PROBE)
 
         await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"   📦 Probe pool: {len(probe_pool)} → "
+                   f"   📦 Probe pool: {len(probe_pool)} customers → "
                    f"{len(PROBE_TEMPLATES)} probes × ~{per_probe} each")
         await emit(campaign_id, "probe_executor", "agent_thought",
                    f"   🎯 Main pool: {len(main_pool)} customers — gets the proven winner")
 
         # ── Future send time ───────────────────────────────────────────────────
-        ist_now  = datetime.utcnow() + timedelta(hours=5, minutes=30)
-        tomorrow = ist_now + timedelta(days=1)
-        send_time = tomorrow.strftime("%d:%m:%y 09:00:00")
+        ist_now   = datetime.utcnow() + timedelta(hours=5, minutes=30)
+        send_dt   = ist_now + timedelta(minutes=15)
+        send_time = send_dt.strftime("%d:%m:%y %H:%M:%S")
 
         # ── Generate probe emails ──────────────────────────────────────────────
         await emit(campaign_id, "probe_executor", "agent_thought",
@@ -211,16 +219,19 @@ async def probe_executor_node(state: CampaignState) -> dict:
         for i, tmpl in enumerate(PROBE_TEMPLATES):
             chunk = probe_pool[i * per_probe : (i + 1) * per_probe]
             if not chunk:
+                await emit(campaign_id, "probe_executor", "agent_thought",
+                           f"   ⚠️  {tmpl['probe_id']}: empty chunk, skipping.")
                 continue
 
             try:
                 content = await _generate_probe_email(llm, tmpl, brief)
             except Exception as e:
                 await emit(campaign_id, "probe_executor", "agent_thought",
-                           f"   ⚠️  LLM failed for {tmpl['probe_id']}: {str(e)[:60]}. Using template fallback.")
+                           f"   ⚠️  LLM failed for {tmpl['probe_id']}: {str(e)[:60]}. Using fallback.")
                 content = {
-                    "subject": f"XDeposit: 1% Higher Returns for You",
-                    "body":    f"Dear Customer,\n\nXDeposit offers 1% higher FD returns.\n\n👉 {XDEPOSIT_URL}\n\nBest,\nSuperBFSI"
+                    "subject": "XDeposit: Earn 1% More on Your Fixed Deposit",
+                    "body":    f"Dear Customer,\n\nXDeposit from SuperBFSI offers 1% higher FD returns "
+                               f"than competitors.\n\n👉 {XDEPOSIT_URL}\n\nBest regards,\nSuperBFSI Team"
                 }
 
             dna = extract_dna(content["subject"], content["body"], tmpl["tone"])
@@ -237,11 +248,14 @@ async def probe_executor_node(state: CampaignState) -> dict:
             })
 
             await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   ✅ {tmpl['probe_id']}: '{content['subject'][:55]}...' → {len(chunk)} customers")
+                       f"   ✅ {tmpl['probe_id']}: '{content['subject'][:55]}' → {len(chunk)} customers")
+
+        if not probe_configs:
+            return _fallback("no probe configs generated")
 
         # ── Send all probes ────────────────────────────────────────────────────
         await emit(campaign_id, "probe_executor", "action",
-                   f"📤 Sending {len(probe_configs)} probe campaigns to CampaignX API...")
+                   f"📤 Sending {len(probe_configs)} probe campaigns...")
 
         probe_ext_ids: dict[str, str] = {}
 
@@ -277,7 +291,7 @@ async def probe_executor_node(state: CampaignState) -> dict:
         await emit(campaign_id, "probe_executor", "action",
                    "📊 Fetching probe results and running Thompson Sampling...")
 
-        sampler      = ThompsonSampler()
+        sampler       = ThompsonSampler()
         probe_results: list[dict] = []
 
         for probe in probe_configs:
@@ -291,7 +305,7 @@ async def probe_executor_node(state: CampaignState) -> dict:
 
             if "error" in report:
                 await emit(campaign_id, "probe_executor", "agent_thought",
-                           f"   ⚠️  Could not fetch report for {pid}: {report['error'][:60]}")
+                           f"   ⚠️  Report fetch failed for {pid}: {report['error'][:60]}")
                 sampler.update(pid, 0, len(probe["customer_ids"]))
                 continue
 
@@ -299,7 +313,7 @@ async def probe_executor_node(state: CampaignState) -> dict:
             click_rate = computed.get("click_rate", 0.0)
             open_rate  = computed.get("open_rate", 0.0)
             total      = computed.get("total_sent", len(probe["customer_ids"]))
-            clicks     = computed.get("clicks", 0)
+            clicks     = int(round(click_rate * total))
 
             sampler.update(pid, clicks, total)
 
@@ -309,81 +323,59 @@ async def probe_executor_node(state: CampaignState) -> dict:
                 "subject":     probe["subject"],
                 "body":        probe["body"],
                 "tone":        probe["tone"],
-                "dna":         probe["dna"],
                 "click_rate":  click_rate,
                 "open_rate":   open_rate,
-                "total":       total,
-                "clicks":      clicks,
-                "external_id": ext_id,
+                "total_sent":  total,
+                "dna":         probe["dna"],
             })
 
             await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   📈 {pid}: Open {open_rate:.1%} | Click {click_rate:.1%} | n={total}")
+                       f"   📊 {pid}: click={click_rate:.1%} open={open_rate:.1%} "
+                       f"(n={total})")
 
-        # ── Thompson Sampling — pick winner ────────────────────────────────────
-        rankings  = sampler.get_rankings()
-        winner_id = sampler.get_winner(n_samples=2000)
+        # ── Thompson Sampling — pick winner ───────────────────────────────────
+        winner_id = sampler.sample_winner()
+        winner    = next((p for p in probe_results if p["probe_id"] == winner_id), None)
+
+        if not winner and probe_results:
+            # fallback: best click rate
+            winner = max(probe_results, key=lambda p: p["click_rate"])
+            winner_id = winner["probe_id"]
+
+        if winner:
+            await emit(campaign_id, "probe_executor", "agent_thought",
+                       f"🏆 Thompson winner: {winner_id} "
+                       f"(click={winner['click_rate']:.1%}, "
+                       f"dimension: {winner['dimension']})")
+            await emit(campaign_id, "probe_executor", "agent_thought",
+                       f"   Subject: '{winner['subject']}'")
+        else:
+            await emit(campaign_id, "probe_executor", "agent_thought",
+                       "⚠️  No clear winner from Thompson Sampling. Using fallback.")
+            return _fallback("no winner from thompson")
+
+        # ── Email DNA extraction ───────────────────────────────────────────────
+        email_dna_signal = compute_dna_signal(probe_results)
+        winning_dna      = get_winning_dna(email_dna_signal)
+        dna_rules        = dna_to_content_instructions(winning_dna)
 
         await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"\n{sampler.summary_str()}")
+                   f"🧬 Email DNA extracted: {list(winning_dna.keys())}")
+        await emit(campaign_id, "probe_executor", "agent_thought",
+                   f"📋 DNA content rules injected into content_gen prompt")
 
-        winner_probe = next(
-            (p for p in probe_results if p["probe_id"] == winner_id),
-            probe_results[0] if probe_results else None
-        )
-
-        if winner_probe:
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"\n🏆 THOMPSON WINNER: {winner_id}")
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   Dimension: {winner_probe['dimension']}")
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   Click Rate: {winner_probe['click_rate']:.1%} | Open: {winner_probe['open_rate']:.1%}")
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   Subject: '{winner_probe['subject'][:80]}'")
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   DNA: {winner_probe['dna']}")
-
-            confident = sampler.is_confident_winner(threshold=0.75)
-            await emit(campaign_id, "probe_executor", "agent_thought",
-                       f"   Confidence: {'HIGH ✅' if confident else 'MODERATE ⚠️ (small probe sample)'}")
-
-        # ── Email DNA Signal Extraction ────────────────────────────────────────
-        signal_map  = compute_dna_signal(probe_results) if probe_results else {}
-        winning_dna = get_winning_dna(signal_map)
-        dna_rules   = dna_to_content_instructions(winning_dna)
+        # Track probed customer IDs as emailed
+        probed_ids = [cid for p in probe_configs for cid in p["customer_ids"]]
+        new_all_emailed = list(all_emailed) + probed_ids
 
         await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"🧬 Winning DNA pattern: {winning_dna}")
-        await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"   DNA rules injected into content_gen for main campaign ✅")
-
-        # ── Build Thompson winner state ────────────────────────────────────────
-        thompson_winner = {}
-        if winner_probe:
-            thompson_winner = {
-                "probe_id":          winner_id,
-                "subject":           winner_probe["subject"],
-                "body":              winner_probe["body"],
-                "tone":              winner_probe["tone"],
-                "dna":               winner_probe["dna"],
-                "click_rate":        winner_probe["click_rate"],
-                "open_rate":         winner_probe["open_rate"],
-                "dimension":         winner_probe["dimension"],
-                "thompson_rankings": rankings,
-                "confidence_high":   sampler.is_confident_winner(),
-            }
-
-        new_all_emailed = list(all_emailed | set(probe_pool))
-
-        await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"\n✅ Probe phase complete. "
-                   f"{len(main_pool)} customers queued for winning formula.")
+                   f"✅ Probe phase complete. "
+                   f"{len(probed_ids)} probed + {len(main_pool)} reserved for main send.")
 
         return {
             "probe_results":            probe_results,
-            "thompson_winner":          thompson_winner,
-            "email_dna_signal":         signal_map,
+            "thompson_winner":          winner,
+            "email_dna_signal":         email_dna_signal,
             "winning_dna":              winning_dna,
             "dna_content_rules":        dna_rules,
             "main_pool_customer_ids":   main_pool,
@@ -392,8 +384,10 @@ async def probe_executor_node(state: CampaignState) -> dict:
         }
 
     except Exception as e:
-        # FIX: Top-level safety net — any unhandled exception falls back gracefully
+        import traceback
+        tb = traceback.format_exc()
         await emit(campaign_id, "probe_executor", "agent_thought",
-                   f"⚠️  Probe phase encountered an error: {str(e)[:120]}. "
-                   f"Falling back to standard A/B execution.")
-        return _fallback(str(e))
+                   f"❌ Probe executor error: {str(e)[:120]}")
+        await emit(campaign_id, "probe_executor", "agent_thought",
+                   f"   Traceback: {tb[:300]}")
+        return _fallback(f"exception: {str(e)}")

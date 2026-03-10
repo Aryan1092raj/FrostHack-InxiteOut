@@ -22,7 +22,9 @@ from db.database import (
     get_cached_cohort,
     save_cohort_cache,
     check_and_increment_rate_limit,
+    clear_cohort_cache,
 )
+from task_manager import start_task, get_task, list_tasks, get_active_tasks
 from db.schemas import (
     StartCampaignRequest,
     RejectCampaignRequest,
@@ -80,6 +82,41 @@ async def health():
         "timestamp": datetime.utcnow().isoformat(),
         "rate_limits": get_rate_limit_status()
     }
+
+
+# ─── Clear cohort cache (call once after preliminary round reset) ─────────────
+
+@app.post("/api/cohort/clear-cache")
+async def clear_cache():
+    """
+    DELETE all cached cohort data so next campaign fetches the fresh 1000-customer cohort.
+    Call this ONCE after the preliminary round reset (new cohort live from 9 March 11:59 PM).
+    """
+    clear_cohort_cache()
+    return {"status": "ok", "message": "Cohort cache cleared. Next campaign will fetch fresh cohort from API."}
+
+
+# ─── Task manager endpoints ───────────────────────────────────────────────────
+
+@app.get("/api/tasks")
+async def list_all_tasks(campaign_id: str = None):
+    """List background tasks — optionally filter by campaign_id."""
+    return {"tasks": list_tasks(campaign_id)}
+
+
+@app.get("/api/tasks/active")
+async def active_tasks():
+    """List only currently running tasks — useful for frontend spinner."""
+    return {"tasks": get_active_tasks()}
+
+
+@app.get("/api/task/{task_id}")
+async def get_task_status(task_id: str):
+    """Poll a specific background task by its task_id."""
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(404, f"Task {task_id} not found")
+    return task
 
 
 # ─── Signup ───────────────────────────────────────────────────────────────────

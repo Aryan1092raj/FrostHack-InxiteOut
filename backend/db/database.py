@@ -361,3 +361,17 @@ def save_cohort_cache(data: list):
     """, (json.dumps(data), now))
     conn.commit()
     conn.close()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH for backend/db/database.py
+# Add this function right after save_cohort_cache()
+# ─────────────────────────────────────────────────────────────────────────────
+
+def clear_cohort_cache():
+    """Delete ALL rows from cohort_cache so the next call fetches fresh from API.
+    Call this once after the preliminary round reset (new 1000-customer cohort)."""
+    conn = get_connection()
+    conn.execute("DELETE FROM cohort_cache")
+    conn.commit()
+    conn.close()
+    print("✅ Cohort cache cleared — next fetch will hit the live API")

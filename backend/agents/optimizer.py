@@ -11,6 +11,7 @@ async def optimizer_node(state: CampaignState) -> dict:
     external_ids = state.get("external_campaign_ids", [])
     iteration = state.get("iteration", 1)
     max_iterations = state.get("max_iterations", 5)
+    total_cohort = 1000  # final round fixed cohort size
 
     await emit(campaign_id, "optimizer", "agent_thought",
                f"Analyzing results for optimization (iteration {iteration}/{max_iterations})...")
@@ -114,10 +115,22 @@ async def optimizer_node(state: CampaignState) -> dict:
                    f"✅ Reached max iterations ({max_iterations}). Campaign complete.")
         return {**base_return, "status": "done", "optimization_notes": "Max iterations reached"}
 
-    if click_rate >= 0.50 and open_rate >= 0.40:
+    # New scoring: maximize absolute EC=Y and EO=Y counts (1000-customer cohort)
+    # EC (click) weighted 70%, EO (open) weighted 30%
+    clicks_abs = int(round(click_rate * metrics.get("total_sent", 0)))
+    opens_abs  = int(round(open_rate  * metrics.get("total_sent", 0)))
+
+    await emit(campaign_id, "optimizer", "agent_thought",
+               f"📊 Absolute counts: {clicks_abs} clicks / {opens_abs} opens out of {total_cohort} cohort")
+
+    # Stop only if we've covered the whole cohort AND click count is strong
+    cohort_coverage = len(all_emailed) / total_cohort if total_cohort > 0 else 0
+    if cohort_coverage >= 0.99 and click_rate >= 0.40:
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🏆 Target metrics achieved! Open {open_rate:.1%} / Click {click_rate:.1%}. Stopping.")
-        return {**base_return, "status": "done", "optimization_notes": "Target metrics achieved"}
+                   f"🏆 Full cohort covered ({len(all_emailed)}/{total_cohort}) "
+                   f"with {click_rate:.1%} click rate. Stopping.")
+        return {**base_return, "status": "done",
+                "optimization_notes": f"Full cohort covered. Clicks={clicks_abs}, Opens={opens_abs}"}
 
     # If all customers already clicked, nothing left to rescue
     if len(underperforming_customer_ids) == 0 and len(emails) > 0 and customer_ec:
@@ -143,11 +156,12 @@ async def optimizer_node(state: CampaignState) -> dict:
     prompt = f"""You are a campaign optimization expert for SuperBFSI's XDeposit campaign.
 
 Current Results (Iteration {iteration}/{max_iterations}):
-- Open Rate: {open_rate:.1%} (target: >40%)
-- Click Rate: {click_rate:.1%} (target: >50% — weighted 70% in scoring)
+- Open Rate: {open_rate:.1%} → {opens_abs} customers opened (target: maximize EO=Y count)
+- Click Rate: {click_rate:.1%} → {clicks_abs} customers clicked (target: maximize EC=Y count, weighted 70%)
 - Total Sent: {metrics.get('total_sent', 0)}
 - Non-clickers to rescue next: {n_underperform}
-- Cohort coverage: {len(all_emailed)}/{len(all_customer_ids)} customers reached
+- Cohort coverage: {len(all_emailed)}/{total_cohort} customers reached ({cohort_coverage:.0%})
+- PRIORITY: Cover ALL 1000 customers at least once before optimizing re-sends
 {coverage_note}
 Best Performing Variant:
 - Subject: "{winning_variant_info.get('subject', 'N/A')}"
