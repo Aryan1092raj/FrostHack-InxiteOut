@@ -54,6 +54,8 @@ async def content_gen_node(state: CampaignState) -> dict:
     winning_variant = state.get("winning_variant_info", {})
     dna_rules       = state.get("dna_content_rules", "")   # Innovation #2
     thompson_winner = state.get("thompson_winner", {})     # Innovation #1
+    opt_subject     = state.get("opt_subject_strategy", "")
+    opt_content     = state.get("opt_content_adjustments", "")
 
     await emit(campaign_id, "content_gen", "agent_thought",
                f"Generating email content (iteration {iteration})...")
@@ -147,6 +149,18 @@ async def content_gen_node(state: CampaignState) -> dict:
                 + "\n".join(f"  • {a}" for a in occupation_angles)
                 + "\n"
             )
+        # ── Optimizer directives (Bug 3 fix: analysis NOW reaches the copy writer) ────────
+        optimizer_directives_block = ""
+        if iteration > 1 and (opt_subject or opt_content):
+            optimizer_directives_block = (
+                f"\n\u26a0\ufe0f  REQUIRED CONTENT DIRECTIVES FROM PERFORMANCE ANALYSIS:\n"
+                f"  These are NOT suggestions — you MUST follow them:\n"
+            )
+            if opt_subject:
+                optimizer_directives_block += f"  • Subject format: {opt_subject}\n"
+            if opt_content:
+                optimizer_directives_block += f"  • Body copy changes: {opt_content}\n"
+
         # ── Seed template to anchor LLM output ─────────────────────────────
         # Pick the template most relevant to this segment (special offer = template 0)
         seed_tmpl = FALLBACK_TEMPLATES[0] if has_special_offer else FALLBACK_TEMPLATES[1]
@@ -180,7 +194,7 @@ Product: XDeposit Term Deposit
 - 1 percentage point HIGHER returns than ALL competitors
 - EXTRA 0.25 percentage point EXCLUSIVELY for female senior citizens
 - CTA URL (only allowed URL): {XDEPOSIT_URL}
-
+{optimizer_directives_block}
 Target Segments:
 {chr(10).join(seg_descriptions)}
 {special_offer_block}

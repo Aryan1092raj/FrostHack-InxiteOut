@@ -33,6 +33,15 @@ async def strategist_node(state: CampaignState) -> dict:
                    f"🎯 Rescue mode: targeting {len(underperforming_ids)} non-clickers only "
                    f"(saving API budget, not re-sending to converters).")
 
+    # Format optimizer analysis as a hard-action block (Bug 3 fix)
+    optimization_notes_block = ""
+    if optimization_notes and iteration > 1:
+        optimization_notes_block = (
+            f"\n⚠️  REQUIRED ACTIONS FROM OPTIMIZER ANALYSIS:\n"
+            f"{optimization_notes}\n"
+            f"Act on the above — do not ignore it.\n"
+        )
+
     llm = get_llm(temperature=0.5)
 
     # Build future send times — always use tomorrow to guarantee future
@@ -46,41 +55,39 @@ async def strategist_node(state: CampaignState) -> dict:
     }
 
     if is_rescue:
-        is_exploit = iteration >= 3
-        if is_exploit:
-            rescue_section = f"""
-⚠️  EXPLOIT MODE (Iteration {iteration}):
-- Targeting {len(underperforming_ids)} customers who haven't clicked yet.
-- The WINNING variant achieved {winning_variant_info.get('click_rate', 0):.1%} CTR:
-  * Subject: "{winning_variant_info.get('subject', 'N/A')}"
-  * Tone: {winning_variant_info.get('tone', 'professional')}
-- REPLICATE this winning approach. Only make MINOR subject line tweaks.
-- DO NOT change the tone or overall strategy — this has been validated.
+        # Non-clickers already saw+ignored the previous approach — ALWAYS explore a different angle.
+        # EXPLOIT (replicate winner) is counterproductive for people who already rejected it.
+        prev_tone   = winning_variant_info.get('tone', 'professional')
+        prev_subj   = winning_variant_info.get('subject', 'N/A')
+        prev_click  = winning_variant_info.get('click_rate', 0)
+
+        # Determine the opposite tone to try
+        explore_tone_hint = (
+            "aspirational or warm/personal"
+            if "professional" in prev_tone or "analytical" in prev_tone
+            else "analytical/number-led or trust-building"
+        )
+
+        rescue_section = f"""
+⚠️  EXPLORE MODE — NON-CLICKER RESCUE (Iteration {iteration}):
+- You are ONLY targeting {len(underperforming_ids)} customers who saw the previous email and DID NOT click.
+- They already ignored: Subject="{prev_subj}" | Tone={prev_tone} | CTR={prev_click:.1%}
+- DO NOT replicate the previous approach — they rejected it. A near-identical re-send will continue to decline.
+- MANDATE: Use a COMPLETELY DIFFERENT angle and tone from what ran before.
+  * Previous tone was "{prev_tone}" → try {explore_tone_hint} instead
+  * If previous led with rate/numbers → try leading with a relatable problem ("Your FD could be doing more")
+  * If previous led with a statement → try a question or narrative opening
+  * Change the emotional hook: try trust/security vs. returns-math vs. social proof
 - BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
-- Preferred tones: trust-building, aspirational, informational, warm/personal.
-- Create 2 variants with slight subject line variations of the winner.
-"""
-        else:
-            rescue_section = f"""
-⚠️  RESCUE TARGETING MODE (Iteration {iteration}):
-- You are ONLY targeting {len(underperforming_ids)} customers who did NOT click last time.
-- DO NOT create a fresh split of all customers — that wastes API calls.
-- The WINNING variant from last run achieved {winning_variant_info.get('click_rate', 0):.1%} CTR:
-  * Subject: "{winning_variant_info.get('subject', 'N/A')}"
-  * Tone: {winning_variant_info.get('tone', 'professional')}
-- BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
-- Create 2 variants that BUILD ON this winning approach with different subject line formats:
-  * If previous was a statement → try a question: "Is your FD earning enough?"
-  * If previous was generic → try number-led: "Earn 1% more — here's how XDeposit compares"
-  * Try personalisation: "Hi [Name], your XDeposit rate is waiting"
-- Both variants will only target subsets of the {len(underperforming_ids)} non-clickers.
-"""
+- Create 2 variants with DIFFERENT angles — do NOT make them variations of each other.
+- Both variants target only the {len(underperforming_ids)} non-clickers (split evenly).
+{optimization_notes_block}"""
         customer_pool_note = (
             f"Target pool: {len(underperforming_ids)} non-clickers from last iteration "
             f"(NOT all {sum(s['size'] for s in segments)} customers)"
         )
     else:
-        rescue_section = ""
+        rescue_section = optimization_notes_block  # surface any notes even on iteration 1 re-runs
         customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
 
     segments_json = json.dumps([
@@ -113,7 +120,6 @@ Available Send Times (DD:MM:YY HH:MM:SS format):
 - Night: {times['night']}
 
 Previous Rejection Reason: {rejection_reason or 'None'}
-Optimization Notes: {optimization_notes or 'First run — no previous data'}
 
 Design an A/B testing strategy to MAXIMISE click rate (weighted 70% in scoring).
 

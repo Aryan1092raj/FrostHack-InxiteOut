@@ -15,6 +15,8 @@ class CampaignState(TypedDict):
     max_iterations:           int              # Stop after this many
     rejection_reason:         Optional[str]    # Set if human rejects
     optimization_notes:       str              # Passed from optimizer → strategist
+    opt_subject_strategy:     str              # Specific subject format LLM recommends next
+    opt_content_adjustments:  str              # Body copy changes LLM recommends next
     status:                   str              # planning|probe_done|running|monitored|optimizing|done|error
     underperforming_customer_ids: List[str]    # Customers who did NOT click last run
     winning_variant_info:     dict             # Best variant's subject/tone/click_rate

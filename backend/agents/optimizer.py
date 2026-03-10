@@ -244,6 +244,8 @@ Return ONLY this JSON:
             **base_return,
             "iteration": iteration + 1,
             "optimization_notes": full_notes,
+            "opt_subject_strategy": subject_strategy,
+            "opt_content_adjustments": content_adj,
             "rejection_reason": None,
             "status": "optimizing",
         }
