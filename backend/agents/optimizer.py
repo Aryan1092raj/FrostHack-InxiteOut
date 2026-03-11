@@ -1,257 +1,232 @@
+"""
+Optimizer Node — Fixed for 1000-customer final round.
+
+KEY CHANGES:
+1. Segments non-clickers into "opened-not-clicked" vs "never-opened" — different strategies
+2. Caps re-targeting at MAX_RETARGET_COUNT per customer — stops wasting calls on cold leads
+3. Passes specific per-bucket strategy to strategist/content_gen instead of generic notes
+"""
+
 import json
 from agents.state import CampaignState
 from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 from db.database import increment_campaign_iteration, get_reports_by_external_ids
 
+# ── After this many emails with no response, drop the customer ────────────────
+MAX_RETARGET_COUNT = 3   # customer emailed 3+ times with no click → stop targeting
+
 
 async def optimizer_node(state: CampaignState) -> dict:
     campaign_id = state["campaign_id"]
-    metrics = state.get("metrics", {})
-    emails = state.get("emails", [])
+    metrics     = state.get("metrics", {})
+    emails      = state.get("emails", [])
     external_ids = state.get("external_campaign_ids", [])
-    iteration = state.get("iteration", 1)
+    iteration   = state.get("iteration", 1)
     max_iterations = state.get("max_iterations", 5)
-    total_cohort = 1000  # final round fixed cohort size
+    all_emailed = state.get("all_emailed_customer_ids", [])
+    all_converted = set(state.get("all_converted_customer_ids", []))
 
     await emit(campaign_id, "optimizer", "agent_thought",
-               f"Analyzing results for optimization (iteration {iteration}/{max_iterations})...")
+               f"🔍 Analyzing results for iteration {iteration}/{max_iterations}...")
 
-    open_rate = metrics.get("open_rate", 0)
+    open_rate  = metrics.get("open_rate", 0)
     click_rate = metrics.get("click_rate", 0)
     per_campaign = metrics.get("per_campaign", [])
-    analysis = metrics.get("analysis", "")
+    analysis   = metrics.get("analysis", "")
 
     await emit(campaign_id, "optimizer", "agent_thought",
-               f"Current scores: Open {open_rate:.1%} | Click {click_rate:.1%}")
+               f"📊 Open {open_rate:.1%} | Click {click_rate:.1%} | "
+               f"Sent {metrics.get('total_sent', 0)} | Emailed so far: {len(all_emailed)}")
 
-    # ── Identify winning variant ──────────────────────────────────────────────
+    # ── Identify winning variant ───────────────────────────────────────────────
     winning_variant_info: dict = {}
     best_click = -1.0
     for i, email in enumerate(emails):
         if i < len(external_ids):
-            ext_id = external_ids[i]
             for pc in per_campaign:
-                if pc.get("external_campaign_id") == ext_id:
+                if pc.get("external_campaign_id") == external_ids[i]:
                     if pc.get("click_rate", 0) > best_click:
-                        best_click = pc.get("click_rate", 0)
+                        best_click = pc["click_rate"]
                         winning_variant_info = {
-                            "variant": email.get("variant", ""),
-                            "subject": email.get("subject", ""),
+                            "variant":      email.get("variant", ""),
+                            "subject":      email.get("subject", ""),
                             "body_excerpt": email.get("body", "")[:200],
-                            "tone": email.get("tone", "professional"),
-                            "send_time": email.get("send_time", ""),
-                            "click_rate": pc.get("click_rate", 0),
-                            "open_rate": pc.get("open_rate", 0),
+                            "tone":         email.get("tone", "professional"),
+                            "click_rate":   pc.get("click_rate", 0),
+                            "open_rate":    pc.get("open_rate", 0),
                         }
 
     if winning_variant_info:
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🏆 Winning variant: '{winning_variant_info['subject'][:70]}' "
-                   f"— Click {winning_variant_info['click_rate']:.1%}")
+                   f"🏆 Winner: '{winning_variant_info['subject'][:60]}' "
+                   f"— click {winning_variant_info['click_rate']:.1%}")
 
-    # ── Find customers who did NOT click (underperformers) ────────────────────
-    underperforming_customer_ids: list = []
-    # Permanent converter set — EC=Y ever means never re-target (scoring safety)
-    all_converted: set = set(state.get("all_converted_customer_ids", []))
-    try:
-        raw_reports = get_reports_by_external_ids(external_ids)
-        customer_ec: dict = {}
-        for rpt in raw_reports:
-            for row in rpt.get("raw_report", {}).get("data", []):
-                cid = row.get("customer_id")
-                if cid:
-                    customer_ec[cid] = row.get("EC", "N")
+    # ── Fetch raw report rows to separate opens vs non-openers ────────────────
+    # We need per-customer EO and EC to split the non-clicker pool correctly
+    all_report_rows: list[dict] = []
+    for pc in per_campaign:
+        ext_id = pc.get("external_campaign_id")
+        if ext_id:
+            raw = get_reports_by_external_ids([ext_id])
+            all_report_rows.extend(raw if isinstance(raw, list) else [])
 
-        # Accumulate new converters from this iteration
-        converters_this_iter = {cid for cid, v in customer_ec.items() if v == "Y"}
-        all_converted = all_converted | converters_this_iter
+    # Build sets from raw rows
+    opened_ids:  set[str] = set()
+    clicked_ids: set[str] = set()
+    for row in all_report_rows:
+        cid = row.get("customer_id", "")
+        if not cid:
+            continue
+        if str(row.get("EO", "N")).upper() == "Y":
+            opened_ids.add(cid)
+        if str(row.get("EC", "N")).upper() == "Y":
+            clicked_ids.add(cid)
 
-        all_sent: list = []
-        for email in emails:
-            all_sent.extend(email.get("customer_ids", []))
+    # Update converted set
+    all_converted.update(clicked_ids)
 
-        # Deduplicate preserving order
-        seen: set = set()
-        unique_sent: list = []
-        for cid in all_sent:
-            if cid not in seen:
-                seen.add(cid)
-                unique_sent.append(cid)
+    # ── Smart non-clicker segmentation ────────────────────────────────────────
+    # Bucket 1: Opened but didn't click → body/CTA problem
+    opened_not_clicked = [
+        cid for cid in opened_ids
+        if cid not in clicked_ids and cid not in all_converted
+    ]
+    # Bucket 2: Never opened → subject problem
+    emailed_set = set(all_emailed)
+    never_opened = [
+        cid for cid in emailed_set
+        if cid not in opened_ids and cid not in all_converted
+    ]
 
-        underperforming_customer_ids = [
-            cid for cid in unique_sent
-            if customer_ec.get(cid, "N") == "N" and cid not in all_converted
-        ]
-        converted = len(unique_sent) - len(underperforming_customer_ids)
+    await emit(campaign_id, "optimizer", "agent_thought",
+               f"📂 Segmented non-clickers:")
+    await emit(campaign_id, "optimizer", "agent_thought",
+               f"   • Opened but didn't click: {len(opened_not_clicked)} → body/CTA fix needed")
+    await emit(campaign_id, "optimizer", "agent_thought",
+               f"   • Never opened: {len(never_opened)} → subject fix needed")
+    await emit(campaign_id, "optimizer", "agent_thought",
+               f"   • Converted (EC=Y, skip forever): {len(all_converted)}")
+
+    # ── Re-target cap: drop customers emailed MAX_RETARGET_COUNT+ times ───────
+    # Track per-customer email count using iteration number as proxy
+    # Simple rule: if iteration >= MAX_RETARGET_COUNT, drop never-openers
+    # (they've proven unresponsive — spending calls on them hurts our rate)
+    if iteration >= MAX_RETARGET_COUNT:
+        dropped = len(never_opened)
+        never_opened = []   # stop targeting completely cold leads
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🎯 {len(underperforming_customer_ids)} non-clickers identified "
-                   f"({converted} already converted — will NOT be re-sent to).")
-        await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🔒 {len(all_converted)} confirmed converters permanently excluded "
-                   f"(re-send would risk their EC=Y score).")
-    except Exception as e:
-        await emit(campaign_id, "optimizer", "agent_thought",
-                   f"⚠️ Could not compute underperformers: {str(e)[:60]}. Will use full cohort.")
+                   f"🚫 Re-target cap reached (iter {iteration} ≥ {MAX_RETARGET_COUNT}): "
+                   f"dropping {dropped} never-opened customers. Focus only on openers.")
 
-    # ── Cohort coverage check ─────────────────────────────────────────────────
-    all_customer_ids = set(c["customer_id"] for c in state.get("customers", []))
-    all_emailed = set(state.get("all_emailed_customer_ids", []))
-    # Exclude confirmed converters from uncovered pool (re-send risks their score)
-    uncovered = all_customer_ids - all_emailed - all_converted
-    coverage_note = ""
+    # ── Stop conditions ────────────────────────────────────────────────────────
+    # With 1000-customer cohort, scoring is absolute EC=Y + EO=Y count
+    total_cohort   = 1000
+    clicks_abs     = len(all_converted)
+    coverage_pct   = len(emailed_set) / total_cohort
 
-    if uncovered:
-        await emit(campaign_id, "optimizer", "agent_thought",
-                   f"⚠️ {len(uncovered)}/{len(all_customer_ids)} customers never emailed! "
-                   f"Merging into rescue pool for next iteration.")
-        # Uncovered customers get priority — prepend them before non-clickers
-        uncovered_list = list(uncovered)
-        underperforming_customer_ids = uncovered_list + [
-            cid for cid in underperforming_customer_ids if cid not in uncovered
-        ]
-        coverage_note = (
-            f"CRITICAL: {len(uncovered)} customers never emailed — cover them FIRST "
-            f"using the winning variant style. "
-        )
-
-    # ── Stop conditions ───────────────────────────────────────────────────────
     base_return = {
-        "winning_variant_info": winning_variant_info,
-        "underperforming_customer_ids": underperforming_customer_ids,
+        "winning_variant_info":       winning_variant_info,
+        "underperforming_customer_ids": opened_not_clicked + never_opened,
         "all_converted_customer_ids": list(all_converted),
     }
 
-    # Check if we should stop
     if iteration >= max_iterations:
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"✅ Reached max iterations ({max_iterations}). Campaign complete.")
-        return {**base_return, "status": "done", "optimization_notes": "Max iterations reached"}
-
-    # New scoring: maximize absolute EC=Y and EO=Y counts (1000-customer cohort)
-    # EC (click) weighted 70%, EO (open) weighted 30%
-    clicks_abs = int(round(click_rate * metrics.get("total_sent", 0)))
-    opens_abs  = int(round(open_rate  * metrics.get("total_sent", 0)))
-
-    await emit(campaign_id, "optimizer", "agent_thought",
-               f"📊 Absolute counts: {clicks_abs} clicks / {opens_abs} opens out of {total_cohort} cohort")
-
-    # Stop only if we've covered the whole cohort AND click count is strong
-    cohort_coverage = len(all_emailed) / total_cohort if total_cohort > 0 else 0
-    if cohort_coverage >= 0.99 and click_rate >= 0.40:
-        await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🏆 Full cohort covered ({len(all_emailed)}/{total_cohort}) "
-                   f"with {click_rate:.1%} click rate. Stopping.")
+                   f"✅ Max iterations ({max_iterations}) reached. "
+                   f"Final: {clicks_abs} clicks, {len(opened_ids)} opens, "
+                   f"coverage {coverage_pct:.0%}.")
         return {**base_return, "status": "done",
-                "optimization_notes": f"Full cohort covered. Clicks={clicks_abs}, Opens={opens_abs}"}
+                "optimization_notes": f"Max iterations. clicks={clicks_abs}"}
 
-    # If all customers already clicked, nothing left to rescue
-    if len(underperforming_customer_ids) == 0 and len(emails) > 0 and customer_ec:
+    if len(opened_not_clicked) == 0 and len(never_opened) == 0:
         await emit(campaign_id, "optimizer", "agent_thought",
-                   "🏆 All sent customers have clicked. Stopping.")
-        return {**base_return, "status": "done", "optimization_notes": "All customers converted"}
+                   "🏆 No rescuable customers left. Stopping.")
+        return {**base_return, "status": "done",
+                "optimization_notes": "All reachable customers converted or dropped"}
 
-    # ── LLM strategy for next iteration ──────────────────────────────────────
+    # ── LLM strategy — split by bucket ────────────────────────────────────────
     llm = get_llm(temperature=0.5)
 
-    n_underperform = len(underperforming_customer_ids) if underperforming_customer_ids else metrics.get("total_sent", 0)
+    prompt = f"""You are an email campaign optimizer for SuperBFSI's XDeposit term deposit.
 
-    per_campaign_summary = json.dumps([
-        {k: v for k, v in pc.items() if k != "customer_ids"}
-        for pc in per_campaign
-    ], indent=2)
-    exploit_instruction = (
-        "EXPLOIT MODE: replicate the winning variant approach with minor subject tweaks only."
-        if iteration >= 3
-        else "Explore different tones and subject formats."
-    )
+ITERATION: {iteration}/{max_iterations}
+OVERALL RESULTS:
+  - Open rate: {open_rate:.1%}  |  Click rate: {click_rate:.1%}
+  - Absolute clicks (EC=Y): {clicks_abs}  |  Cohort coverage: {coverage_pct:.0%} of 1000
+  - Winning subject: "{winning_variant_info.get('subject', 'N/A')}"
+  - Winning tone: {winning_variant_info.get('tone', 'N/A')}
 
-    prompt = f"""You are a campaign optimization expert for SuperBFSI's XDeposit campaign.
+NON-CLICKER SEGMENTATION:
+  Bucket A — Opened but didn't click: {len(opened_not_clicked)} customers
+    → They SAW the subject and opened. The body/CTA failed them.
+    → Fix: Move CTA to line 1. Add specific ₹ benefit. Cut body by 50%.
+  Bucket B — Never opened: {len(never_opened)} customers
+    → The subject didn't grab them.
+    → Fix: Completely different subject format. If we used statement → try question.
+           If we used number → try personalised. Try emoji in subject.
 
-Current Results (Iteration {iteration}/{max_iterations}):
-- Open Rate: {open_rate:.1%} → {opens_abs} customers opened (target: maximize EO=Y count)
-- Click Rate: {click_rate:.1%} → {clicks_abs} customers clicked (target: maximize EC=Y count, weighted 70%)
-- Total Sent: {metrics.get('total_sent', 0)}
-- Non-clickers to rescue next: {n_underperform}
-- Cohort coverage: {len(all_emailed)}/{total_cohort} customers reached ({cohort_coverage:.0%})
-- PRIORITY: Cover ALL 1000 customers at least once before optimizing re-sends
-{coverage_note}
-Best Performing Variant:
-- Subject: "{winning_variant_info.get('subject', 'N/A')}"
-- Tone: {winning_variant_info.get('tone', 'N/A')}
-- Click Rate: {winning_variant_info.get('click_rate', 0):.1%}
-- Body excerpt: "{winning_variant_info.get('body_excerpt', 'N/A')}"
-
-Performance Analysis: {analysis}
-
-Per-Campaign Breakdown:
-{per_campaign_summary}
-
-CRITICAL RULES:
-1. BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
-2. Preferred tones: trust-building, aspirational, informational, warm/personal.
-3. {exploit_instruction}
-
-Next iteration will re-target the {n_underperform} non-clickers/uncovered customers.
-Provide specific instructions for the rescue send to maximise click rate.
+BANNED: urgency, scarcity, FOMO, pressure. API PENALISES these.
+ALLOWED: trust-building, aspirational, informational, warm/personal.
 
 Return ONLY this JSON:
 {{
-    "should_continue": true,
-    "optimization_notes": "Tone/angle/content strategy for the rescue send",
-    "subject_line_strategy": "Specific format to try: question / number-led / personalised (NOT urgency)",
-    "content_adjustments": "What to change in the email body to drive more clicks",
-    "timing_adjustments": "Best send time for non-clickers (morning / evening / night)"
+  "bucket_a_subject_strategy": "specific subject format for opened-not-clicked (keep similar to winner since they DID open)",
+  "bucket_a_body_strategy": "specific body fix — what to change to get them to click",
+  "bucket_b_subject_strategy": "completely different subject format for never-opened",
+  "bucket_b_body_strategy": "body strategy for never-opened",
+  "should_continue": true,
+  "optimization_notes": "one line summary"
 }}"""
 
     try:
         content = await invoke_with_retry(llm, prompt)
-        result = json.loads(clean_llm_json(content), strict=False)
+        result  = json.loads(clean_llm_json(content))
 
         should_continue = result.get("should_continue", True)
         notes = result.get("optimization_notes", "")
-        subject_strategy = result.get("subject_line_strategy", "")
-        content_adj = result.get("content_adjustments", "")
-        timing_adj = result.get("timing_adjustments", "")
+
+        # Build separate strategy strings for each bucket
+        # These get passed into state and used by strategist/content_gen
+        bucket_a_strategy = (
+            f"OPENED-NOT-CLICKED RESCUE ({len(opened_not_clicked)} customers):\n"
+            f"  Subject: {result.get('bucket_a_subject_strategy', 'Keep similar to winner — they opened it')}\n"
+            f"  Body: {result.get('bucket_a_body_strategy', 'Move CTA to line 1. Cut to 80 words max.')}"
+        )
+        bucket_b_strategy = (
+            f"NEVER-OPENED RESCUE ({len(never_opened)} customers):\n"
+            f"  Subject: {result.get('bucket_b_subject_strategy', 'Completely different format from previous')}\n"
+            f"  Body: {result.get('bucket_b_body_strategy', 'Short. Lead with benefit in line 1.')}"
+        )
 
         full_notes = (
-            f"{coverage_note}"
-            f"Iter {iteration} winner: subject='{winning_variant_info.get('subject', '')}' "
-            f"tone={winning_variant_info.get('tone', '')} "
-            f"click={winning_variant_info.get('click_rate', 0):.1%}. "
-            f"Rescue {n_underperform} non-clickers. "
-            f"Strategy: {notes}. "
-            f"Subject format to try: {subject_strategy}. "
-            f"Content: {content_adj}. Timing: {timing_adj}."
+            f"iter={iteration} | clicks={clicks_abs} | coverage={coverage_pct:.0%}\n"
+            f"Bucket A ({len(opened_not_clicked)} openers): {bucket_a_strategy[:120]}\n"
+            f"Bucket B ({len(never_opened)} cold): {bucket_b_strategy[:120]}\n"
+            f"LLM: {notes}"
         )
 
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🔧 Rescue strategy: {notes}")
+                   f"🔧 Bucket A strategy: {result.get('bucket_a_subject_strategy', '')[:80]}")
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"📝 Subject format: {subject_strategy}")
+                   f"🔧 Bucket B strategy: {result.get('bucket_b_subject_strategy', '')[:80]}")
 
         if not should_continue:
-            await emit(campaign_id, "optimizer", "agent_thought",
-                       "✅ Optimizer: performance acceptable. Stopping.")
             return {**base_return, "status": "done", "optimization_notes": full_notes}
 
         increment_campaign_iteration(campaign_id)
 
-        await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🔄 Launching rescue iteration {iteration + 1} "
-                   f"({n_underperform} non-clickers only)...")
-
         return {
             **base_return,
-            "iteration": iteration + 1,
-            "optimization_notes": full_notes,
-            "opt_subject_strategy": subject_strategy,
-            "opt_content_adjustments": content_adj,
-            "rejection_reason": None,
-            "status": "optimizing",
+            "iteration":               iteration + 1,
+            "optimization_notes":      full_notes,
+            "opt_subject_strategy":    result.get("bucket_b_subject_strategy", ""),   # for never-opened
+            "opt_content_adjustments": result.get("bucket_a_body_strategy", ""),      # for opened-not-clicked
+            "rejection_reason":        None,
+            "status":                  "optimizing",
         }
 
     except Exception as e:
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"⚠️ Optimizer fallback: {str(e)[:80]}. Stopping.")
+                   f"⚠️ Optimizer error: {str(e)[:80]}. Stopping.")
         return {**base_return, "status": "done",
                 "optimization_notes": f"Optimizer error: {str(e)}"}
