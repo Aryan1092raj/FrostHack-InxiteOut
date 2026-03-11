@@ -143,7 +143,8 @@ Rules:
 - MUST cover ALL segments — assign every segment_id to at least one variant
 - Choose DIFFERENT send times for each variant
 - BANNED: Do NOT use urgency, scarcity, or FOMO tones — the API penalizes this
-- Preferred tones: trust-building, aspirational, informational, warm/personal
+- BANNED tones: trust-building, warm and respectful — these have consistently achieved <1% click rate
+- Preferred tones: aspirational, informational, warm/personal
 - For rescue iterations: use DIFFERENT subject formats to what already ran
 
 Return ONLY this JSON:
@@ -175,12 +176,12 @@ Return ONLY this JSON:
 }}"""
 
     # Inject winning tone lock — prevents the LLM re-generating a losing tone on iter 2+
-    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2 and not is_rescue:
+    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
         winning_tone  = winning_variant_info["tone"]
         winning_click = winning_variant_info.get("click_rate", 0)
         tone_lock = (
-            f"\n🏆 WINNING TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
-            f"BOTH variants MUST use this tone. Only vary subject line format between them.\n"
+            f"\n🔒 TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
+            f"BOTH variants MUST use this tone. Only subject line format differs between them.\n"
             f"DO NOT generate any variant with a different tone.\n"
         )
         prompt = prompt.replace("Return ONLY this JSON:", tone_lock + "\nReturn ONLY this JSON:")
