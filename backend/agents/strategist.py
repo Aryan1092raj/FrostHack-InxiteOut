@@ -174,6 +174,17 @@ Return ONLY this JSON:
     "expected_winner": "variant_a or variant_b and why"
 }}"""
 
+    # Inject winning tone lock — prevents the LLM re-generating a losing tone on iter 2+
+    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2 and not is_rescue:
+        winning_tone  = winning_variant_info["tone"]
+        winning_click = winning_variant_info.get("click_rate", 0)
+        tone_lock = (
+            f"\n🏆 WINNING TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
+            f"BOTH variants MUST use this tone. Only vary subject line format between them.\n"
+            f"DO NOT generate any variant with a different tone.\n"
+        )
+        prompt = prompt.replace("Return ONLY this JSON:", tone_lock + "\nReturn ONLY this JSON:")
+
     try:
         content = await invoke_with_retry(llm, prompt)
         result = json.loads(clean_llm_json(content), strict=False)

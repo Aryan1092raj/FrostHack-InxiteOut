@@ -135,6 +135,15 @@ def smartsplit_customers(customers: list) -> list[dict]:
         if cid not in assigned:
             bucket_ids["general"].append(cid)
 
+    # ── Merge micro female_senior bucket into general if < 10% of cohort ─────
+    # A tiny seg_1 (e.g. 80 vs 920) makes A/B comparison statistically meaningless.
+    # Merge them but keep special_offer flag so content_gen still adds the 0.25% mention.
+    merged_female_seniors = False
+    if bucket_ids["female_senior"] and len(bucket_ids["female_senior"]) < len(customers) * 0.10:
+        bucket_ids["general"].extend(bucket_ids["female_senior"])
+        bucket_ids["female_senior"] = []
+        merged_female_seniors = True
+
     # ── Pass 2: Build rich segment dicts ──────────────────────────────────────
     id_to_customer = {c["customer_id"]: c for c in customers}
 
@@ -197,7 +206,7 @@ def smartsplit_customers(customers: list) -> list[dict]:
             ),
             "optimal_send_time":    meta["optimal_send_time"],
             "tone":                 meta["tone"],
-            "special_offer":        meta["special_offer"],
+            "special_offer":        meta["special_offer"] or (bucket_name == "general" and merged_female_seniors),
             "key_angle":            meta["key_angle"],
             # Innovation #3 extras:
             "occupation_breakdown": occ_breakdown,

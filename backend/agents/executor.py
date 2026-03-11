@@ -45,21 +45,31 @@ async def executor_node(state: CampaignState) -> dict:
                    f"🧠 Probe-Exploit mode: distributing {len(main_pool)} main-pool customers "
                    f"across {len(emails)} variants using Thompson-winner DNA formula.")
 
-        n_emails   = len(emails)
-        per_variant = len(main_pool) // n_emails
-        slices     = []
-        for i in range(n_emails):
-            start = i * per_variant
-            end   = (i + 1) * per_variant if i < n_emails - 1 else len(main_pool)
-            slices.append(main_pool[start:end])
+        n_emails = len(emails)
+        # 80/20 split: proven winner gets the bulk, challenger gets the rest
+        if n_emails == 2 and thompson_winner.get("subject"):
+            winner_count = int(len(main_pool) * 0.80)
+            slices = [main_pool[:winner_count], main_pool[winner_count:]]
+        else:
+            per_variant = len(main_pool) // n_emails
+            slices = []
+            for i in range(n_emails):
+                start = i * per_variant
+                end   = (i + 1) * per_variant if i < n_emails - 1 else len(main_pool)
+                slices.append(main_pool[start:end])
 
         for i, email in enumerate(emails):
-            if thompson_winner.get("subject"):
-                email["customer_ids"]       = slices[i]
-                email["thompson_informed"]  = True
+            email["customer_ids"] = slices[i]
+            if i == 0 and thompson_winner.get("subject"):
+                # Variant A sends the ACTUAL winning probe email — proven formula, not an LLM riff
+                email["subject"] = thompson_winner["subject"]
+                email["body"]    = thompson_winner["body"]
+                email["tone"]    = thompson_winner.get("tone", email.get("tone"))
+            email["thompson_informed"] = True
 
         await emit(campaign_id, "executor", "agent_thought",
-                   f"   Thompson winner informed {len(emails)} variants. "
+                   f"   80/20 split: {len(slices[0]) if slices else 0} → variant_a (winner), "
+                   f"{len(slices[1]) if len(slices) > 1 else 0} → variant_b (challenger). "
                    f"DNA rules active: {bool(dna_rules)}")
     else:
         await emit(campaign_id, "executor", "agent_thought",

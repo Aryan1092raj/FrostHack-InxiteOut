@@ -80,6 +80,9 @@ async def emit(campaign_id: str, agent: str, event_type: str,
 
 def clean_llm_json(text: str) -> str:
     """Strip markdown and extract valid JSON from LLM response."""
+    # Drop surrogate characters that Llama/Groq occasionally emits — they break UTF-8 encoding
+    # and cause json.loads to throw before our post-parse sanitizer ever runs.
+    text = text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="ignore")
     text = text.strip()
 
     # Remove markdown code fences

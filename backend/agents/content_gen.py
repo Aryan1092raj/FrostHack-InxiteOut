@@ -174,11 +174,13 @@ async def content_gen_node(state: CampaignState) -> dict:
         thompson_block = ""
         if thompson_winner and iteration == 1:
             thompson_block = (
-                f"\n🏆 PROBE WINNER CONTEXT (do NOT copy — use as inspiration for what works):\n"
-                f"  Winning probe: {thompson_winner.get('probe_id')} | "
-                f"dimension: {thompson_winner.get('dimension')}\n"
-                f"  Winning subject: '{thompson_winner.get('subject', '')[:60]}'\n"
-                f"  Click rate achieved: {thompson_winner.get('click_rate', 0):.1%}\n"
+                f"\n🏆 PROBE WINNER — REPLICATE THIS FORMULA EXACTLY:\n"
+                f"  Subject: '{thompson_winner.get('subject', '')[:80]}'\n"
+                f"  Tone: {thompson_winner.get('tone', '')}\n"
+                f"  Dimension that won: {thompson_winner.get('dimension', '')}\n"
+                f"  Click rate: {thompson_winner.get('click_rate', 0):.1%}\n"
+                f"  INSTRUCTION: Your variant_a MUST follow the same formula — "
+                f"same tone, same CTA position, same emoji density. Only change subject wording slightly.\n"
             )
         elif winning_variant and iteration > 1:
             thompson_block = (
