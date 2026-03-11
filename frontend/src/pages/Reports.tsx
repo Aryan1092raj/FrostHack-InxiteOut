@@ -51,23 +51,58 @@ export default function Reports() {
   const segments: any[] = campaign.strategy?.segments || []
   const emails: any[] = campaign.emails || []
 
-  // Optimization history — group pairs of reports into iteration cycles
-  // (each iteration sends 2 variants → 2 reports per cycle)
-  const historyData: {cycle: string, "Open Rate": number, "Click Rate": number}[] = []
-  for (let i = 0; i < reports.length; i += 2) {
-    const pair = reports.slice(i, i + 2)
-    const totalSent = pair.reduce((s: number, r: any) => s + (r.total_sent || 0), 0)
-    const weightedOpen = totalSent > 0
-      ? Math.round(pair.reduce((s: number, r: any) => s + r.open_rate * (r.total_sent || 0), 0) / totalSent * 100)
-      : 0
-    const weightedClick = totalSent > 0
-      ? Math.round(pair.reduce((s: number, r: any) => s + r.click_rate * (r.total_sent || 0), 0) / totalSent * 100)
-      : 0
-    historyData.push({
-      cycle: `Cycle ${Math.floor(i / 2) + 1}`,
-      "Open Rate": weightedOpen,
-      "Click Rate": weightedClick,
+  // ── FIX: Build historyData grouped by iteration_number ────────────────────
+  // OLD: hardcoded `i += 2` assumed exactly 2 variants per cycle — breaks with
+  //      1 variant, 3 variants, or probe + main sends.
+  // NEW: group by iteration_number field, fall back to hour-bucket grouping.
+  const historyData: { cycle: string; "Open Rate": number; "Click Rate": number }[] = []
+
+  if (reports.length > 0) {
+    const iterationMap = new Map<number, any[]>()
+    let hasIterationField = false
+
+    reports.forEach((r: any) => {
+      const iter = r.iteration_number ?? r.iteration ?? null
+      if (iter !== null) {
+        hasIterationField = true
+        if (!iterationMap.has(iter)) iterationMap.set(iter, [])
+        iterationMap.get(iter)!.push(r)
+      }
     })
+
+    if (hasIterationField && iterationMap.size > 0) {
+      // Best path: grouped by actual iteration number
+      Array.from(iterationMap.entries())
+        .sort(([a], [b]) => a - b)
+        .forEach(([, group], idx) => {
+          const totalSent = group.reduce((s: number, r: any) => s + (r.total_sent || 0), 0)
+          const weightedOpen = totalSent > 0
+            ? Math.round(group.reduce((s: number, r: any) => s + (r.open_rate || 0) * (r.total_sent || 0), 0) / totalSent * 100)
+            : 0
+          const weightedClick = totalSent > 0
+            ? Math.round(group.reduce((s: number, r: any) => s + (r.click_rate || 0) * (r.total_sent || 0), 0) / totalSent * 100)
+            : 0
+          historyData.push({ cycle: `Cycle ${idx + 1}`, "Open Rate": weightedOpen, "Click Rate": weightedClick })
+        })
+    } else {
+      // Fallback: group by hour bucket (handles legacy data without iteration_number)
+      const timeMap = new Map<string, any[]>()
+      reports.forEach((r: any) => {
+        const key = r.created_at ? r.created_at.slice(0, 13) : String(reports.indexOf(r))
+        if (!timeMap.has(key)) timeMap.set(key, [])
+        timeMap.get(key)!.push(r)
+      })
+      Array.from(timeMap.entries()).forEach(([, group], idx) => {
+        const totalSent = group.reduce((s: number, r: any) => s + (r.total_sent || 0), 0)
+        const weightedOpen = totalSent > 0
+          ? Math.round(group.reduce((s: number, r: any) => s + (r.open_rate || 0) * (r.total_sent || 0), 0) / totalSent * 100)
+          : 0
+        const weightedClick = totalSent > 0
+          ? Math.round(group.reduce((s: number, r: any) => s + (r.click_rate || 0) * (r.total_sent || 0), 0) / totalSent * 100)
+          : 0
+        historyData.push({ cycle: `Cycle ${idx + 1}`, "Open Rate": weightedOpen, "Click Rate": weightedClick })
+      })
+    }
   }
 
   // Segment performance
@@ -98,9 +133,15 @@ export default function Reports() {
     || latestReport?.raw_report?.computed_metrics?.analysis
     || null
 
-  const latestOpen = latestReport?.open_rate ? Math.round(latestReport.open_rate * 100) : Math.round((campaign.metrics?.open_rate || 0) * 100)
-  const latestClick = latestReport?.click_rate ? Math.round(latestReport.click_rate * 100) : Math.round((campaign.metrics?.click_rate || 0) * 100)
-  const totalSent = campaign.metrics?.total_sent || 0
+  // ── FIX: Header stats now use same source as chart ────────────────────────
+  // OLD: latestOpen/latestClick pulled from latestReport (single variant) while
+  //      chart used weighted average across all variants → numbers diverged.
+  // NEW: both read from historyData's latest cycle — always identical.
+  const latestCycle  = historyData[historyData.length - 1]
+  const latestOpen   = latestCycle?.["Open Rate"]  ?? Math.round((campaign.metrics?.open_rate  || 0) * 100)
+  const latestClick  = latestCycle?.["Click Rate"] ?? Math.round((campaign.metrics?.click_rate || 0) * 100)
+  const totalSent    = campaign.metrics?.total_sent || 0
+  const numCycles    = historyData.length || campaign.iteration || Math.ceil(reports.length / 2)
 
   const TABS = [
     { key: "overview", label: "Overview" },
@@ -124,7 +165,7 @@ export default function Reports() {
               Campaign Analysis
             </h1>
             <p style={{ color: "var(--t3)", fontSize: "0.83rem", marginTop: 5 }}>
-              #{id!.slice(0, 8)} · {reports.length} optimization cycle{reports.length !== 1 ? "s" : ""} completed
+              #{id!.slice(0, 8)} · {numCycles} optimization cycle{numCycles !== 1 ? "s" : ""} completed
             </p>
           </div>
           <span className={`badge badge-${campaign.status.replace("awaiting_approval", "awaiting")}`} style={{ marginTop: 6 }}>
@@ -160,10 +201,10 @@ export default function Reports() {
       {/* KPI Row */}
       <div className="anim-up delay-1" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "0.85rem", marginBottom: "1.75rem" }}>
         {[
-          { label: "Open Rate",  value: `${latestOpen}%`,   color: "var(--teal)",   prog: latestOpen,   bar: "var(--teal)" },
-          { label: "Click Rate", value: `${latestClick}%`,  color: "var(--gold)",   prog: latestClick,  bar: "var(--gold)" },
-          { label: "Emails Sent",value: totalSent.toLocaleString(), color: "var(--purple)", prog: 0, bar: "var(--purple)" },
-          { label: "Iterations", value: campaign.iteration || Math.ceil(reports.length / 2),  color: "var(--orange)",  prog: 0, bar: "var(--orange)" },
+          { label: "Open Rate",   value: `${latestOpen}%`,              color: "var(--teal)",   prog: latestOpen,  bar: "var(--teal)"   },
+          { label: "Click Rate",  value: `${latestClick}%`,             color: "var(--gold)",   prog: latestClick, bar: "var(--gold)"   },
+          { label: "Emails Sent", value: totalSent.toLocaleString(),    color: "var(--purple)", prog: 0,           bar: "var(--purple)" },
+          { label: "Iterations",  value: String(numCycles),             color: "var(--orange)", prog: 0,           bar: "var(--orange)" },
         ].map(s => (
           <div key={s.label} className="stat">
             <div className="label" style={{ marginBottom: 8 }}>{s.label}</div>
@@ -273,7 +314,6 @@ export default function Reports() {
             )}
           </div>
 
-          {/* Segment detail list */}
           {segments.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
               {segments.map((seg: any, i: number) => {
@@ -338,7 +378,6 @@ export default function Reports() {
             )}
           </div>
 
-          {/* Email previews */}
           <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
             {emails.map((email: any, i: number) => {
               const colors = ["var(--gold)", "var(--teal)", "var(--purple)", "var(--orange)"]
@@ -394,16 +433,15 @@ export default function Reports() {
             )}
           </div>
 
-          {/* Raw metrics summary */}
           {latestReport && (
             <div className="card" style={{ padding: "1.25rem", marginTop: "1rem" }}>
               <div className="label" style={{ marginBottom: "0.85rem" }}>Latest Report Summary</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
                 {[
-                  { label: "Total Rows", value: latestReport.raw_report?.total_rows || 0 },
-                  { label: "Fetched At", value: latestReport.fetched_at?.slice(0, 16) || "—" },
-                  { label: "Open Rate", value: `${Math.round((latestReport.open_rate || 0) * 100)}%` },
-                  { label: "Click Rate", value: `${Math.round((latestReport.click_rate || 0) * 100)}%` },
+                  { label: "Total Rows",  value: latestReport.raw_report?.total_rows || 0 },
+                  { label: "Fetched At",  value: latestReport.fetched_at?.slice(0, 16) || "—" },
+                  { label: "Open Rate",   value: `${latestOpen}%` },
+                  { label: "Click Rate",  value: `${latestClick}%` },
                 ].map(m => (
                   <div key={m.label} style={{ padding: "0.75rem", background: "var(--card2)", borderRadius: 8 }}>
                     <div className="label" style={{ marginBottom: 4 }}>{m.label}</div>

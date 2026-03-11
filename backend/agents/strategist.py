@@ -87,7 +87,20 @@ async def strategist_node(state: CampaignState) -> dict:
             f"(NOT all {sum(s['size'] for s in segments)} customers)"
         )
     else:
-        rescue_section = optimization_notes_block  # surface any notes even on iteration 1 re-runs
+        exploit_instruction = (
+            "EXPLOIT MODE: replicate the winning variant approach with minor subject tweaks only."
+            if iteration >= 2
+            else "Explore different tones and subject formats."
+        )
+        # Add hard tone constraint when a winning variant has an identified tone
+        if winning_variant_info and winning_variant_info.get("tone"):
+            winning_tone = winning_variant_info["tone"]
+            exploit_instruction += (
+                f"\n\nCRITICAL: The winning tone is '{winning_tone}' — BOTH variants MUST use this tone."
+                f"\nDO NOT generate any variant with a different tone."
+                f"\nOnly vary the subject line format between the two variants."
+            )
+        rescue_section = optimization_notes_block + f"\n{exploit_instruction}\n"
         customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
 
     segments_json = json.dumps([
