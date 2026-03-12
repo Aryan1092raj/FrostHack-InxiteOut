@@ -7,14 +7,19 @@ from shared import sse_queues
 
 load_dotenv()
 
-SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
-
 
 def strip_invalid_unicode(text: str) -> str:
-    """Remove unpaired surrogate code points that break UTF-8 encoding."""
+    """Remove unpaired surrogate code points and other invalid UTF-8 sequences.
+    LLMs sometimes emit corrupted Unicode — encode/decode with 'ignore' to strip it."""
     if not isinstance(text, str):
         return text
-    return SURROGATE_RE.sub("", text)
+    # Try to encode to UTF-8 and back, discarding invalid sequences
+    try:
+        # Use 'surrogateescape' error handler to permit already-corrupt strings,
+        # then re-encode and re-decode to clean them
+        return text.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
+    except Exception:
+        return text
 
 def get_llm(temperature: float = 0.7, force_gemini: bool = False):
     """
