@@ -144,6 +144,19 @@ async def optimizer_node(state: CampaignState) -> dict:
         return {**base_return, "status": "done",
                 "optimization_notes": "All reachable customers converted or dropped"}
 
+    # ── Coverage + click-rate hard stop (PS compliance) ───────────────────────
+    # PS scores on absolute EC=Y + EO=Y counts — no reason to burn extra API
+    # calls once we've hit the entire cohort AND a solid click rate.
+    if coverage_pct >= 0.99 and click_rate >= 0.20:
+        await emit(campaign_id, "optimizer", "agent_thought",
+                   f"✅ Coverage {coverage_pct:.0%} + click rate {click_rate:.1%} ≥ 20% — "
+                   f"target hit ({clicks_abs} absolute clicks). Stopping.")
+        return {**base_return, "status": "done",
+                "optimization_notes": (
+                    f"Coverage+click target met. "
+                    f"clicks={clicks_abs}, coverage={coverage_pct:.0%}, ctr={click_rate:.1%}"
+                )}
+
     # ── LLM strategy — split by bucket ────────────────────────────────────────
     llm = get_llm(temperature=0.5)
 
