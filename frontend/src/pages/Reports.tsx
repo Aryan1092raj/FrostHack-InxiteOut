@@ -88,7 +88,7 @@ export default function Reports() {
       // Fallback: group by hour bucket (handles legacy data without iteration_number)
       const timeMap = new Map<string, any[]>()
       reports.forEach((r: any) => {
-        const key = r.created_at ? r.created_at.slice(0, 13) : String(reports.indexOf(r))
+        const key = r.fetched_at ? r.fetched_at.slice(0, 13) : String(reports.indexOf(r))
         if (!timeMap.has(key)) timeMap.set(key, [])
         timeMap.get(key)!.push(r)
       })

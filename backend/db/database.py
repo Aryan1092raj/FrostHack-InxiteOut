@@ -52,6 +52,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL,
             external_campaign_id TEXT,  -- ID returned by CampaignX API
+            iteration_number INTEGER DEFAULT 1,
             open_rate REAL DEFAULT 0.0,
             click_rate REAL DEFAULT 0.0,
             total_sent INTEGER DEFAULT 0,
@@ -63,8 +64,9 @@ def init_db():
         )
     """)
 
-    # Migration: add opens/clicks columns if they don't exist (idempotent)
-    for col in ["opens INTEGER DEFAULT 0", "clicks INTEGER DEFAULT 0"]:
+    # Migration: add columns if they don't exist (idempotent)
+    for col in ["opens INTEGER DEFAULT 0", "clicks INTEGER DEFAULT 0",
+                "iteration_number INTEGER DEFAULT 1"]:
         col_name = col.split()[0]
         try:
             cursor.execute(f"ALTER TABLE reports ADD COLUMN {col}")
@@ -225,7 +227,8 @@ def get_agent_logs(campaign_id: str) -> List[Dict[str, Any]]:
 # ─── Reports CRUD ─────────────────────────────────────────────────────────────
 
 def save_report(campaign_id: str, external_id: str, open_rate: float,
-                click_rate: float, total_sent: int, raw_report: dict):
+                click_rate: float, total_sent: int, raw_report: dict,
+                iteration_number: int = 1):
     conn = get_connection()
     now = datetime.utcnow().isoformat()
     computed = raw_report.get("computed_metrics", {})
@@ -233,10 +236,10 @@ def save_report(campaign_id: str, external_id: str, open_rate: float,
     clicks = computed.get("clicks", round((click_rate or 0) * (total_sent or 0)))
     conn.execute("""
         INSERT INTO reports
-        (campaign_id, external_campaign_id, open_rate, click_rate,
+        (campaign_id, external_campaign_id, iteration_number, open_rate, click_rate,
          total_sent, opens, clicks, raw_report, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (campaign_id, external_id, open_rate, click_rate,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (campaign_id, external_id, iteration_number, open_rate, click_rate,
           total_sent, opens, clicks, json.dumps(raw_report), now))
     conn.commit()
     conn.close()

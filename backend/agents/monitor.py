@@ -66,8 +66,9 @@ async def monitor_node(state: CampaignState) -> dict:
             "customer_ids": email_info.get("customer_ids", []),
         })
 
-        # Save to DB (with opens/clicks)
-        save_report(campaign_id, ext_id, open_rate, click_rate, total, result)
+        # Save to DB (with opens/clicks and iteration number for chart grouping)
+        save_report(campaign_id, ext_id, open_rate, click_rate, total, result,
+                    iteration_number=state.get("iteration", 1))
 
         await emit(campaign_id, "monitor", "agent_thought",
                    f"📊 Campaign {ext_id[:8]}...: "
