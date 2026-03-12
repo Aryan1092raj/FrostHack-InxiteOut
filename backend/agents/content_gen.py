@@ -225,13 +225,11 @@ Return ONLY valid JSON (no markdown, no backticks):
 
         try:
             raw     = await invoke_with_retry(llm, prompt)
+            # Strip unpaired surrogates BEFORE json.loads — they crash the codec
+            raw     = raw.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
             content = json.loads(clean_llm_json(raw), strict=False)
             subject = content.get("subject", "")[:200]
             body    = content.get("body", "")[:5000]
-
-            # Strip unpaired surrogates that some LLMs emit (causes utf-8 encode errors)
-            subject = subject.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
-            body    = body.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
 
             # Enforce CTA presence
             if include_url and XDEPOSIT_URL not in body:
