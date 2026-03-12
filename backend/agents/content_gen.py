@@ -8,7 +8,7 @@ Content Gen — Updated to use:
 import json
 import random
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry, strip_invalid_unicode
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 XDEPOSIT_URL = "https://superbfsi.com/xdeposit/explore/"
 
@@ -22,9 +22,9 @@ FALLBACK_TEMPLATES = [
             f"XDeposit from SuperBFSI gives you <b>1% higher returns</b> than most "
             f"competitors \u2014 that\u2019s \u20b91,000 extra per year on every \u20b91 lakh deposited.\n\n"
             f"Senior women get an <b>additional 0.25%</b> on top.\n\n"
-            f"View details: <a href=\"{XDEPOSIT_URL}\">See what XDeposit pays you</a>\n\n"
+            f"\ud83d\udc49 <a href=\"{XDEPOSIT_URL}\">See what XDeposit pays you</a>\n\n"
             f"No lock-in surprises. RBI-regulated. Trusted by thousands.\n\n"
-            f"Explore now: {XDEPOSIT_URL}\n\n"
+            f"\ud83d\udc49 {XDEPOSIT_URL}\n\n"
             f"\u2014 SuperBFSI Team"
         ),
     },
@@ -36,8 +36,8 @@ FALLBACK_TEMPLATES = [
             f"XDeposit pays <b>1 percentage point more</b> \u2014 and for senior women, "
             f"an extra 0.25% on top of that.\n\n"
             f"Simple math: more return, same safety, same bank guarantee.\n\n"
-            f"Calculate here: <a href=\"{XDEPOSIT_URL}\">Calculate your XDeposit earnings</a>\n\n"
-            f"Explore now: {XDEPOSIT_URL}\n\n"
+            f"\ud83d\udc49 <a href=\"{XDEPOSIT_URL}\">Calculate your XDeposit earnings</a>\n\n"
+            f"\ud83d\udc49 {XDEPOSIT_URL}\n\n"
             f"\u2014 SuperBFSI"
         ),
     },
@@ -165,7 +165,7 @@ async def content_gen_node(state: CampaignState) -> dict:
         # Pick the template most relevant to this segment (special offer = template 0)
         seed_tmpl = FALLBACK_TEMPLATES[0] if has_special_offer else FALLBACK_TEMPLATES[1]
         seed_block = (
-            f"\nSEED TEMPLATE (improve on this — do NOT copy verbatim):\n"
+            f"\n\ud83c\udfaf SEED TEMPLATE (improve on this — do NOT copy verbatim):\n"
             f"  Subject: \"{seed_tmpl['subject']}\"\n"
             f"  Body excerpt: \"{seed_tmpl['body'][:200]}...\"\n"
             f"  Your output MUST be more specific, more personalised, and stronger CTA.\n"
@@ -224,23 +224,25 @@ Return ONLY valid JSON (no markdown, no backticks):
 {{"subject": "Your subject here", "body": "Your body here"}}"""
 
         try:
-            prompt  = strip_invalid_unicode(prompt)
             raw     = await invoke_with_retry(llm, prompt)
-            raw     = strip_invalid_unicode(raw)
             content = json.loads(clean_llm_json(raw), strict=False)
-            subject = strip_invalid_unicode(content.get("subject", ""))[:200]
-            body    = strip_invalid_unicode(content.get("body", ""))[:5000]
+            subject = content.get("subject", "")[:200]
+            body    = content.get("body", "")[:5000]
+
+            # Strip unpaired surrogates that some LLMs emit (causes utf-8 encode errors)
+            subject = subject.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
+            body    = body.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
 
             # Enforce CTA presence
             if include_url and XDEPOSIT_URL not in body:
-                body += f"\n\nExplore XDeposit now: {XDEPOSIT_URL}"
+                body += f"\n\n👉 Explore XDeposit now: {XDEPOSIT_URL}"
 
             await emit(campaign_id, "content_gen", "agent_thought",
                        f"✅ {variant_id}: '{subject[:60]}...'")
 
         except Exception as e:
             await emit(campaign_id, "content_gen", "agent_thought",
-                       f"⚠️  Content fallback for {variant_id}: {repr(e)} | RAW: {repr(strip_invalid_unicode(locals().get('raw', '')[:300]))}")
+                       f"⚠️  Content fallback for {variant_id}: {str(e)[:80]}")
             tmpl   = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
             subject = tmpl["subject"]
             body    = tmpl["body"]
