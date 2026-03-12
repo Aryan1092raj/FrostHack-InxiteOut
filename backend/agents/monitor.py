@@ -159,6 +159,15 @@ Be specific about which segments or variants underperformed."""
                f"Total Sent {all_metrics['total_sent']}")
     await emit(campaign_id, "monitor", "agent_thought",
                f"🔍 Analysis: {analysis}")
+    # Expose per-iteration rates alongside cumulative so the optimizer LLM
+    # prompt can show "this iteration" vs "all-time" without confusion.
+    if current_metrics["total_sent"] > 0:
+        all_metrics["current_open_rate"]  = round(current_metrics["opens"]  / current_metrics["total_sent"], 4)
+        all_metrics["current_click_rate"] = round(current_metrics["clicks"] / current_metrics["total_sent"], 4)
+    else:
+        all_metrics["current_open_rate"]  = all_metrics["open_rate"]
+        all_metrics["current_click_rate"] = all_metrics["click_rate"]
+
     await emit(campaign_id, "monitor", "metric_update",
                "Metrics updated",
                data={

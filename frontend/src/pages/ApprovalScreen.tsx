@@ -142,9 +142,10 @@ export default function ApprovalScreen() {
                 </div>
               </div>
 
-              <div className="email-body">
-                {email.body || "No body content"}
-              </div>
+              <div
+                className="email-body"
+                dangerouslySetInnerHTML={{ __html: email.body || "No body content" }}
+              />
             </div>
           )
         })}

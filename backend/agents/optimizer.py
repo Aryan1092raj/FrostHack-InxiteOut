@@ -62,24 +62,28 @@ async def optimizer_node(state: CampaignState) -> dict:
                    f"— click {winning_variant_info['click_rate']:.1%}")
 
     # ── Fetch raw report rows to separate opens vs non-openers ────────────────
-    # We need per-customer EO and EC to split the non-clicker pool correctly
+    # get_reports_by_external_ids returns [{external_campaign_id, raw_report}]
+    # Per-customer rows are nested inside raw_report["data"]
     all_report_rows: list[dict] = []
     for pc in per_campaign:
         ext_id = pc.get("external_campaign_id")
         if ext_id:
-            raw = get_reports_by_external_ids([ext_id])
-            all_report_rows.extend(raw if isinstance(raw, list) else [])
+            db_rows = get_reports_by_external_ids([ext_id])
+            for db_row in (db_rows if isinstance(db_rows, list) else []):
+                # Each db_row = {"external_campaign_id": ..., "raw_report": {"data": [...]}}
+                customer_rows = db_row.get("raw_report", {}).get("data", [])
+                all_report_rows.extend(customer_rows)
 
-    # Build sets from raw rows
+    # Build sets from per-customer rows
     opened_ids:  set[str] = set()
     clicked_ids: set[str] = set()
-    for row in all_report_rows:
-        cid = row.get("customer_id", "")
+    for customer_row in all_report_rows:
+        cid = customer_row.get("customer_id", "")
         if not cid:
             continue
-        if str(row.get("EO", "N")).upper() == "Y":
+        if str(customer_row.get("EO", "N")).upper() == "Y":
             opened_ids.add(cid)
-        if str(row.get("EC", "N")).upper() == "Y":
+        if str(customer_row.get("EC", "N")).upper() == "Y":
             clicked_ids.add(cid)
 
     # Update converted set
@@ -144,6 +148,15 @@ async def optimizer_node(state: CampaignState) -> dict:
         return {**base_return, "status": "done",
                 "optimization_notes": "All reachable customers converted or dropped"}
 
+    # ── Cold-pool stop: tiny rescue pool isn't worth another API round ────────
+    total_rescuable = len(opened_not_clicked) + len(never_opened)
+    if total_rescuable < 50:
+        await emit(campaign_id, "optimizer", "agent_thought",
+                   f"🛑 Only {total_rescuable} rescuable customers remain (<50). "
+                   f"Not worth another API spend. Stopping.")
+        return {**base_return, "status": "done",
+                "optimization_notes": f"Rescue pool too small ({total_rescuable}). Stopping."}
+
     # ── Coverage + click-rate hard stop (PS compliance) ───────────────────────
     # PS scores on absolute EC=Y + EO=Y counts — no reason to burn extra API
     # calls once we've hit the entire cohort AND a solid click rate.
@@ -160,10 +173,19 @@ async def optimizer_node(state: CampaignState) -> dict:
     # ── LLM strategy — split by bucket ────────────────────────────────────────
     llm = get_llm(temperature=0.5)
 
+    # Current-iteration rates (from per_campaign, which is always this iteration only)
+    iter_sent   = sum(pc.get("total_sent", 0) for pc in per_campaign)
+    iter_opens  = sum(pc.get("open_rate",  0) * pc.get("total_sent", 0) for pc in per_campaign)
+    iter_clicks = sum(pc.get("click_rate", 0) * pc.get("total_sent", 0) for pc in per_campaign)
+    iter_open_rate  = round(iter_opens  / iter_sent, 4) if iter_sent > 0 else open_rate
+    iter_click_rate = round(iter_clicks / iter_sent, 4) if iter_sent > 0 else click_rate
+
     prompt = f"""You are an email campaign optimizer for SuperBFSI's XDeposit term deposit.
 
 ITERATION: {iteration}/{max_iterations}
-OVERALL RESULTS:
+THIS ITERATION RESULTS (current send only):
+  - Open rate: {iter_open_rate:.1%}  |  Click rate: {iter_click_rate:.1%}  |  Sent: {iter_sent}
+CUMULATIVE RESULTS (all iterations):
   - Open rate: {open_rate:.1%}  |  Click rate: {click_rate:.1%}
   - Absolute clicks (EC=Y): {clicks_abs}  |  Cohort coverage: {coverage_pct:.0%} of 1000
   - Winning subject: "{winning_variant_info.get('subject', 'N/A')}"

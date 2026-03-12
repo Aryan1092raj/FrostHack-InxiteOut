@@ -1,10 +1,20 @@
 import os
+import re
 import asyncio
 from dotenv import load_dotenv
 from db.database import save_agent_log
 from shared import sse_queues
 
 load_dotenv()
+
+SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def strip_invalid_unicode(text: str) -> str:
+    """Remove unpaired surrogate code points that break UTF-8 encoding."""
+    if not isinstance(text, str):
+        return text
+    return SURROGATE_RE.sub("", text)
 
 def get_llm(temperature: float = 0.7, force_gemini: bool = False):
     """
@@ -67,6 +77,7 @@ async def invoke_with_retry(llm, prompt: str, max_retries: int = 3) -> str:
 async def emit(campaign_id: str, agent: str, event_type: str, 
                message: str, data: dict = {}):
     """Push SSE event to frontend and save to agent logs."""
+    message = strip_invalid_unicode(message)
     queue = sse_queues.get(campaign_id)
     if queue:
         await queue.put({
@@ -80,9 +91,7 @@ async def emit(campaign_id: str, agent: str, event_type: str,
 
 def clean_llm_json(text: str) -> str:
     """Strip markdown and extract valid JSON from LLM response."""
-    # Drop surrogate characters that Llama/Groq occasionally emits — they break UTF-8 encoding
-    # and cause json.loads to throw before our post-parse sanitizer ever runs.
-    text = text.encode("utf-8", errors="surrogatepass").decode("utf-8", errors="ignore")
+    text = strip_invalid_unicode(text)
     text = text.strip()
 
     # Remove markdown code fences
