@@ -213,12 +213,23 @@ Variant Style:
 
 {dna_rules if dna_rules else ''}
 
-Email Rules (STRICT):
-- Subject: plain English only, max 200 chars, NO URLs
-- Body: English text + emojis + {XDEPOSIT_URL} ONLY — max 5000 chars
-- Use bold **text**, italic _text_, underline <u>text</u>
-- CTA URL must appear at LEAST twice — in the FIRST 2 sentences AND at the end
-- Click rate is the #1 goal — make every sentence push toward the CTA
+STRICT EMAIL RULES:
+- Subject: plain text, max 200 chars, NO URLs
+- Body: MAXIMUM 80 WORDS — hard limit, count them
+- Line 1 of body: the CTA link — no preamble before it
+  Example: "👉 Your FD is losing 1% yearly. See what XDeposit pays: {XDEPOSIT_URL}"
+- Line 2: one sentence with the specific number (₹1,000 extra per lakh/year)
+- Line 3: one trust signal (RBI-regulated / no lock-in surprises)
+- Final line: repeat CTA URL bare
+- NO: long paragraphs, company history, "we are excited", generic phrases
+- BANNED PHRASES: "don't miss out", "act now", "limited time", "exciting opportunity"
+- Formatting: <b>key numbers only</b> — do not bold entire sentences
+- BANNED: markdown asterisks **text** — use <b>text</b> only
+- Use this structure exactly:
+  1. CTA + benefit in sentence 1
+  2. Specific numeric payoff sentence
+  3. One trust/reassurance sentence
+  4. Bare CTA URL on the final line
 
 Return ONLY valid JSON (no markdown, no backticks):
 {{"subject": "Your subject here", "body": "Your body here"}}"""
