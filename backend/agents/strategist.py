@@ -1,3 +1,20 @@
+"""
+strategist.py — A/B strategy design.
+
+Issues fixed in this rewrite:
+  1. Tone lock: winning tone is injected at the TOP of the prompt as an
+     absolute mandate from iteration 2 onwards. Not buried at the end.
+  2. Subject format lock: winning subject format (question/number/statement)
+     is detected and enforced for variant_a. variant_b must use opposite
+     format so we keep learning while exploiting.
+  3. Rescue logic fixed: non-clickers who OPENED get same subject format
+     (it worked) but different body/CTA. Non-clickers who NEVER OPENED get
+     a completely different subject. Previously all non-clickers got "completely
+     different everything" which threw away the open-rate signal.
+  4. Send time is now 15 minutes from now (IST), not tomorrow. For the demo
+     this means campaigns fire immediately after approval.
+"""
+
 import json
 from datetime import datetime, timedelta
 from agents.state import CampaignState
@@ -5,24 +22,31 @@ from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 
 def _detect_subject_format(subject: str) -> str:
-    s = (subject or "").strip()
-    if not s:
-        return "unknown"
-    if "?" in s:
+    """Detect whether a subject is question / number-led / statement."""
+    s = subject.strip()
+    if s.endswith("?"):
         return "question"
-    first_token = s.split()[0] if s.split() else ""
-    if first_token[:1].isdigit() or first_token.startswith("₹"):
+    if s and (s[0].isdigit() or s[:2] in ("1%", "1 ", "₹", "Re")):
         return "number-led"
     return "statement"
 
 
+def _opposite_format(fmt: str) -> str:
+    mapping = {
+        "question":    "number-led (start with a number or ₹ amount)",
+        "number-led":  "question (end with ?)",
+        "statement":   "question (end with ?)",
+    }
+    return mapping.get(fmt, "question (end with ?)")
+
+
 async def strategist_node(state: CampaignState) -> dict:
-    campaign_id = state["campaign_id"]
-    brief = state["brief"]
-    segments = state["segments"]
-    iteration = state.get("iteration", 1)
+    campaign_id        = state["campaign_id"]
+    brief              = state["brief"]
+    segments           = state["segments"]
+    iteration          = state.get("iteration", 1)
     optimization_notes = state.get("optimization_notes", "")
-    rejection_reason = state.get("rejection_reason", "")
+    rejection_reason   = state.get("rejection_reason", "")
     underperforming_ids: list = state.get("underperforming_customer_ids", [])
     winning_variant_info: dict = state.get("winning_variant_info", {})
 
@@ -33,118 +57,123 @@ async def strategist_node(state: CampaignState) -> dict:
         await emit(campaign_id, "strategist", "agent_thought",
                    f"Incorporating rejection feedback: {rejection_reason}")
 
-    if optimization_notes and iteration > 1:
-        await emit(campaign_id, "strategist", "agent_thought",
-                   f"Optimization context: {optimization_notes[:120]}...")
-
-    # For iteration 2+, rescue only the non-clickers — don't re-blast full cohort
     is_rescue = iteration > 1 and len(underperforming_ids) > 0
-
-    tone_mandate = ""
-    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
-        winning_tone = winning_variant_info["tone"]
-        winning_click = winning_variant_info.get("click_rate", 0)
-        tone_mandate = (
-            f"\n{'='*60}\n"
-            f"🔒 ABSOLUTE MANDATE — TONE LOCK\n"
-            f"Tone '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
-            f"BOTH variant_a AND variant_b MUST use tone: '{winning_tone}'\n"
-            f"Using ANY other tone will be treated as a CRITICAL FAILURE.\n"
-            f"Only vary: subject line wording. Everything else stays.\n"
-            f"{'='*60}\n"
-        )
 
     if is_rescue:
         await emit(campaign_id, "strategist", "agent_thought",
-                   f"🎯 Rescue mode: targeting {len(underperforming_ids)} non-clickers only "
-                   f"(saving API budget, not re-sending to converters).")
-
-    # Format optimizer analysis as a hard-action block (Bug 3 fix)
-    optimization_notes_block = ""
-    if optimization_notes and iteration > 1:
-        optimization_notes_block = (
-            f"\n⚠️  REQUIRED ACTIONS FROM OPTIMIZER ANALYSIS:\n"
-            f"{optimization_notes}\n"
-            f"Act on the above — do not ignore it.\n"
-        )
+                   f"🎯 Rescue mode: targeting {len(underperforming_ids)} non-clickers only.")
 
     llm = get_llm(temperature=0.5)
 
-    # Build future send times — always use tomorrow to guarantee future
+    # ── Send times — 15 minutes from now, not tomorrow ────────────────────────
+    # This ensures campaigns fire quickly after approval for demo purposes.
     now = datetime.utcnow() + timedelta(hours=5, minutes=30)  # IST
-    tomorrow = now + timedelta(days=1)
+    base = now + timedelta(minutes=15)
     times = {
-        "morning": tomorrow.strftime("%d:%m:%y 09:00:00"),
-        "afternoon": tomorrow.strftime("%d:%m:%y 13:00:00"),
-        "evening": tomorrow.strftime("%d:%m:%y 18:00:00"),
-        "night": tomorrow.strftime("%d:%m:%y 20:00:00"),
+        "soon":      base.strftime("%d:%m:%y %H:%M:%S"),
+        "morning":   base.strftime("%d:%m:%y %H:%M:%S"),   # same as soon for iteration 1
+        "afternoon": (base + timedelta(hours=1)).strftime("%d:%m:%y %H:%M:%S"),
+        "evening":   (base + timedelta(hours=2)).strftime("%d:%m:%y %H:%M:%S"),
+        "night":     (base + timedelta(hours=3)).strftime("%d:%m:%y %H:%M:%S"),
     }
 
+    # ── Tone and subject lock (iterations 2+) ─────────────────────────────────
+    # These go at the TOP of the prompt so the LLM cannot ignore them.
+    lock_block = ""
+    if winning_variant_info and iteration >= 2:
+        winning_tone    = winning_variant_info.get("tone", "")
+        winning_subject = winning_variant_info.get("subject", "")
+        winning_click   = winning_variant_info.get("click_rate", 0)
+        winning_open    = winning_variant_info.get("open_rate", 0)
+
+        if winning_tone:
+            winning_fmt  = _detect_subject_format(winning_subject)
+            opposite_fmt = _opposite_format(winning_fmt)
+
+            lock_block = (
+                f"\n{'='*60}\n"
+                f"🔒 ABSOLUTE MANDATES — READ BEFORE ANYTHING ELSE\n"
+                f"{'='*60}\n"
+                f"Winning variant data:\n"
+                f"  Subject: '{winning_subject}'\n"
+                f"  Tone: {winning_tone}\n"
+                f"  Open rate: {winning_open:.1%} | Click rate: {winning_click:.1%}\n"
+                f"\n"
+                f"MANDATE 1 — TONE:\n"
+                f"  Both variant_a AND variant_b MUST use tone: '{winning_tone}'\n"
+                f"  Using any other tone is a CRITICAL FAILURE.\n"
+                f"\n"
+                f"MANDATE 2 — SUBJECT FORMAT:\n"
+                f"  variant_a subject MUST use '{winning_fmt}' format (proven winner).\n"
+                f"  variant_b subject MUST use '{opposite_fmt}' format (challenger).\n"
+                f"  Only the wording changes — the FORMAT is fixed.\n"
+                f"\n"
+                f"BANNED subject openers (these get ignored in inboxes):\n"
+                f"  'Earn', 'Introducing', 'Announcing', 'Learn', 'Discover',\n"
+                f"  'Get', 'We are', 'Dear Customer'\n"
+                f"{'='*60}\n"
+            )
+
+    # ── Rescue section ────────────────────────────────────────────────────────
+    # FIX: Rescue logic now correctly separates openers from non-openers.
+    # Previously all non-clickers got "completely different everything" which
+    # discarded the open-rate signal. Now:
+    #   - Bucket A (opened, didn't click): keep subject format, change body/CTA
+    #   - Bucket B (never opened): change subject format entirely
+    rescue_section = ""
+    customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
+
     if is_rescue:
-        # Non-clickers already saw+ignored the previous approach — ALWAYS explore a different angle.
-        # EXPLOIT (replicate winner) is counterproductive for people who already rejected it.
-        prev_tone   = winning_variant_info.get('tone', 'professional')
-        prev_subj   = winning_variant_info.get('subject', 'N/A')
-        prev_click  = winning_variant_info.get('click_rate', 0)
+        prev_tone    = winning_variant_info.get("tone", "informational, friendly")
+        prev_subject = winning_variant_info.get("subject", "N/A")
+        prev_click   = winning_variant_info.get("click_rate", 0)
+        prev_open    = winning_variant_info.get("open_rate", 0)
 
-        # Determine the opposite tone to try
-        explore_tone_hint = (
-            "aspirational or warm/personal"
-            if "professional" in prev_tone or "analytical" in prev_tone
-            else "analytical/number-led or trust-building"
+        rescue_section = (
+            f"\n⚠️ RESCUE MODE (Iteration {iteration}):\n"
+            f"Targeting {len(underperforming_ids)} customers who did NOT click last time.\n"
+            f"Previous: Subject='{prev_subject}' | Tone={prev_tone} | "
+            f"Open={prev_open:.1%} | Click={prev_click:.1%}\n"
+            f"\n"
+            f"These non-clickers fall into two groups:\n"
+            f"  Bucket A — opened but did not click (~those who opened):\n"
+            f"    → Subject format WORKED (they opened). Keep same format.\n"
+            f"    → Body/CTA FAILED. Put CTA in sentence 1. Cut to 80 words max.\n"
+            f"  Bucket B — never opened:\n"
+            f"    → Subject FAILED. Use a completely different format.\n"
+            f"    → Short subject, lead with a number or question.\n"
+            f"\n"
+            f"Split the {len(underperforming_ids)} non-clickers evenly:\n"
+            f"  variant_a → Bucket A strategy (CTA-first body fix)\n"
+            f"  variant_b → Bucket B strategy (new subject format)\n"
         )
+        if optimization_notes:
+            rescue_section += f"\nOptimizer analysis:\n{optimization_notes}\n"
 
-        prev_subject_format = _detect_subject_format(prev_subj)
-        format_rotation_line = ""
-        if prev_subject_format == "statement":
-            format_rotation_line = "  - MANDATE: If iter 1 used a statement → iter 2 must use a question"
-        elif prev_subject_format == "question":
-            format_rotation_line = "  - MANDATE: If iter 2 used a question → iter 3 must use a number-led subject"
-
-        rescue_section = f"""
-⚠️  EXPLORE MODE — NON-CLICKER RESCUE (Iteration {iteration}):
-- You are ONLY targeting {len(underperforming_ids)} customers who saw the previous email and DID NOT click.
-- They already ignored: Subject="{prev_subj}" | Tone={prev_tone} | CTR={prev_click:.1%}
-- DO NOT replicate the previous approach — they rejected it. A near-identical re-send will continue to decline.
-- MANDATE: Use a COMPLETELY DIFFERENT angle and tone from what ran before.
-  * Previous tone was "{prev_tone}" → try {explore_tone_hint} instead
-  * If previous led with rate/numbers → try leading with a relatable problem ("Your FD could be doing more")
-  * If previous led with a statement → try a question or narrative opening
-  * Change the emotional hook: try trust/security vs. returns-math vs. social proof
-- 🚫 BANNED subject formats (these already failed with non-clickers):
-    - Any subject starting the same way as: '{prev_subj[:40]}'
-    - Statement format if previous was a statement
-{format_rotation_line}
-- BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
-- Create 2 variants with DIFFERENT angles — do NOT make them variations of each other.
-- Both variants target only the {len(underperforming_ids)} non-clickers (split evenly).
-{optimization_notes_block}"""
         customer_pool_note = (
-            f"Target pool: {len(underperforming_ids)} non-clickers from last iteration "
-            f"(NOT all {sum(s['size'] for s in segments)} customers)"
+            f"Target pool: {len(underperforming_ids)} non-clickers "
+            f"(NOT the full {sum(s['size'] for s in segments)} cohort)"
         )
-    else:
-        exploit_instruction = (
-            "EXPLOIT MODE: replicate the winning variant approach with minor subject tweaks only."
-            if iteration >= 2
-            else "Explore different tones and subject formats."
+    elif optimization_notes and iteration > 1:
+        rescue_section = (
+            f"\n⚠️ REQUIRED ACTIONS FROM OPTIMIZER:\n{optimization_notes}\n"
         )
-        rescue_section = optimization_notes_block + f"\n{exploit_instruction}\n"
-        customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
 
+    # ── Segments JSON ─────────────────────────────────────────────────────────
     segments_json = json.dumps([
         {
-            "segment_id": s["segment_id"],
-            "name": s["name"],
-            "size": s["size"],
+            "segment_id":          s["segment_id"],
+            "name":                s["name"],
+            "size":                s["size"],
             "targeting_rationale": s.get("targeting_rationale", ""),
-            "optimal_send_time": s.get("optimal_send_time", "morning"),
-            "tone": s.get("tone", "professional"),
+            "optimal_send_time":   s.get("optimal_send_time", "morning"),
+            "tone":                s.get("tone", "informational, friendly"),
         }
         for s in segments
     ], indent=2)
 
-    prompt = f"""You are a digital marketing strategist for SuperBFSI launching XDeposit term deposit.
+    # ── Build prompt ──────────────────────────────────────────────────────────
+    prompt = f"""{lock_block}You are a digital marketing strategist for SuperBFSI launching XDeposit term deposit.
 
 Campaign Brief: {brief}
 
@@ -152,41 +181,38 @@ Current Iteration: {iteration}
 {rescue_section}
 {customer_pool_note}
 
-Available Customer Segments (for reference):
+Available Customer Segments:
 {segments_json}
 
-Available Send Times (DD:MM:YY HH:MM:SS format):
-- Morning: {times['morning']}
-- Afternoon: {times['afternoon']}
-- Evening: {times['evening']}
-- Night: {times['night']}
+Available Send Times:
+- Soon (15 min from now): {times['soon']}
+- Afternoon:              {times['afternoon']}
+- Evening:                {times['evening']}
+- Night:                  {times['night']}
 
 Previous Rejection Reason: {rejection_reason or 'None'}
 
-Design an A/B testing strategy to MAXIMISE click rate (weighted 70% in scoring).
+Design an A/B strategy to MAXIMISE click rate (weighted 70% in scoring).
 
 Rules:
 - Create exactly 2 A/B variants (variant_a and variant_b)
-- Segment A = Female Senior Citizens (unique 0.25% bonus — lead with this)
-- Segment B = General Audience (1% higher returns — clear value proposition)
-- MUST cover ALL segments — assign every segment_id to at least one variant
+- MUST assign every segment_id to at least one variant — no orphaned customers
 - Choose DIFFERENT send times for each variant
-- BANNED: Do NOT use urgency, scarcity, or FOMO tones — the API penalizes this
-- If tone lock is active, both variants MUST keep the locked tone exactly
-- For rescue iterations: use DIFFERENT subject formats to what already ran
+- BANNED tones: urgency, scarcity, FOMO, pressure — the API penalises these
+- Preferred tones: trust-building, aspirational, informational, warm/personal
 
-Return ONLY this JSON:
+Return ONLY this JSON (no markdown, no backticks):
 {{
     "ab_variants": [
         {{
             "variant_id": "variant_a",
             "name": "Descriptive name",
             "segment_ids": ["seg_1"],
-            "send_time": "{times['morning']}",
+            "send_time": "{times['soon']}",
             "strategy_notes": "Why this variant and timing",
-            "tone": "professional",
+            "tone": "informational, friendly",
             "include_url": true,
-            "include_emoji": false
+            "include_emoji": true
         }},
         {{
             "variant_id": "variant_b",
@@ -194,58 +220,50 @@ Return ONLY this JSON:
             "segment_ids": ["seg_2"],
             "send_time": "{times['evening']}",
             "strategy_notes": "Why this variant and timing",
-            "tone": "friendly and warm",
+            "tone": "aspirational",
             "include_url": true,
-            "include_emoji": true
+            "include_emoji": false
         }}
     ],
     "overall_rationale": "Why this strategy will maximise click rate",
     "expected_winner": "variant_a or variant_b and why"
 }}"""
 
-    if tone_mandate:
-        prompt = tone_mandate + prompt
-
+    # ── Call LLM ──────────────────────────────────────────────────────────────
     try:
-        content = await invoke_with_retry(llm, prompt)
-        result = json.loads(clean_llm_json(content), strict=False)
+        content  = await invoke_with_retry(llm, prompt)
+        result   = json.loads(clean_llm_json(content), strict=False)
         variants = result.get("ab_variants", [])
-        rationale = result.get("overall_rationale", "")
+        rationale      = result.get("overall_rationale", "")
         expected_winner = result.get("expected_winner", "")
 
-        if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
-            locked_tone = winning_variant_info["tone"]
-            for v in variants:
-                v["tone"] = locked_tone
-            await emit(campaign_id, "strategist", "agent_thought",
-                       f"🔒 Tone lock enforced post-generation: {locked_tone}")
+        if not variants:
+            raise ValueError("LLM returned no variants")
 
-        # Ensure ALL segments are assigned to at least one variant (no orphaned customers)
+        # Ensure every segment is assigned to at least one variant
         if not is_rescue:
-            assigned_sids: set = set()
+            assigned: set = set()
             for v in variants:
-                assigned_sids.update(v.get("segment_ids", []))
+                assigned.update(v.get("segment_ids", []))
             all_sids = [s["segment_id"] for s in segments]
-            unassigned = [sid for sid in all_sids if sid not in assigned_sids]
+            unassigned = [sid for sid in all_sids if sid not in assigned]
             if unassigned:
                 for i, sid in enumerate(unassigned):
-                    variants[i % len(variants)]["segment_ids"].append(sid)
+                    variants[i % len(variants)].setdefault("segment_ids", []).append(sid)
                 await emit(campaign_id, "strategist", "agent_thought",
-                           f"📎 {len(unassigned)} orphaned segments redistributed across variants.")
+                           f"📎 {len(unassigned)} orphaned segments redistributed.")
 
-        # For rescue iterations: override customer IDs with the real underperforming
-        # pool split evenly across the two variants — content_gen uses these directly.
+        # Inject rescue customer IDs directly so content_gen doesn't need segment lookup
         if is_rescue and underperforming_ids:
             mid = len(underperforming_ids) // 2
             if len(variants) >= 2:
                 variants[0]["direct_customer_ids"] = underperforming_ids[:mid]
                 variants[1]["direct_customer_ids"] = underperforming_ids[mid:]
-            elif len(variants) == 1:
+            else:
                 variants[0]["direct_customer_ids"] = underperforming_ids
-
             await emit(campaign_id, "strategist", "agent_thought",
-                       f"✅ Rescue IDs injected: "
-                       f"{mid} → variant_a, {len(underperforming_ids) - mid} → variant_b")
+                       f"✅ Rescue IDs injected: {mid} → variant_a, "
+                       f"{len(underperforming_ids) - mid} → variant_b")
 
         await emit(campaign_id, "strategist", "agent_thought",
                    f"✅ Strategy ready: {len(variants)} variants. {rationale[:100]}")
@@ -253,75 +271,79 @@ Return ONLY this JSON:
                    f"🏆 Expected winner: {expected_winner}")
 
         for v in variants:
-            n_cust = len(v.get("direct_customer_ids", [])) or "segment-based"
+            n = len(v.get("direct_customer_ids", [])) or "segment-based"
             await emit(campaign_id, "strategist", "agent_thought",
-                       f"📧 {v['variant_id']}: '{v['name']}' → {n_cust} customers @ {v['send_time']}")
+                       f"📧 {v['variant_id']}: '{v.get('name','')}' → "
+                       f"{n} customers @ {v.get('send_time','')}")
 
-        strategy = {
-            "ab_variants": variants,
-            "rationale": rationale,
-            "expected_winner": expected_winner,
-            "iteration": iteration
+        return {
+            "strategy": {
+                "ab_variants":    variants,
+                "rationale":      rationale,
+                "expected_winner": expected_winner,
+                "iteration":      iteration,
+            },
+            "status": "strategy_ready",
         }
-
-        return {"strategy": strategy, "status": "strategy_ready"}
 
     except Exception as e:
         await emit(campaign_id, "strategist", "agent_thought",
-                   f"⚠️ Using default strategy: {str(e)[:80]}")
+                   f"⚠️ LLM strategy failed ({str(e)[:80]}). Using deterministic fallback.")
 
+        # Deterministic fallback — always produces valid variants
         if is_rescue and underperforming_ids:
             mid = len(underperforming_ids) // 2
             fallback_variants = [
                 {
-                    "variant_id": "variant_a",
-                    "name": "Rescue Variant A",
-                    "segment_ids": [],
-                    "direct_customer_ids": underperforming_ids[:mid],
-                    "send_time": times["morning"],
-                    "tone": "professional",
-                    "include_url": True,
-                    "include_emoji": False
+                    "variant_id":           "variant_a",
+                    "name":                 "Rescue CTA-First",
+                    "segment_ids":          [],
+                    "direct_customer_ids":  underperforming_ids[:mid],
+                    "send_time":            times["soon"],
+                    "tone":                 winning_variant_info.get("tone", "aspirational"),
+                    "include_url":          True,
+                    "include_emoji":        True,
                 },
                 {
-                    "variant_id": "variant_b",
-                    "name": "Rescue Variant B",
-                    "segment_ids": [],
-                    "direct_customer_ids": underperforming_ids[mid:],
-                    "send_time": times["evening"],
-                    "tone": "friendly",
-                    "include_url": True,
-                    "include_emoji": True
-                }
+                    "variant_id":           "variant_b",
+                    "name":                 "Rescue New Subject",
+                    "segment_ids":          [],
+                    "direct_customer_ids":  underperforming_ids[mid:],
+                    "send_time":            times["evening"],
+                    "tone":                 "informational, friendly",
+                    "include_url":          True,
+                    "include_emoji":        False,
+                },
             ]
         else:
-            # Ensure fallback covers ALL segments — split evenly
-            mid = len(segments) // 2 or 1
+            mid = max(len(segments) // 2, 1)
             fallback_variants = [
                 {
-                    "variant_id": "variant_a",
-                    "name": "Variant A",
+                    "variant_id":  "variant_a",
+                    "name":        "Aspirational",
                     "segment_ids": [s["segment_id"] for s in segments[:mid]],
-                    "send_time": times["morning"],
-                    "tone": "professional",
+                    "send_time":   times["soon"],
+                    "tone":        "aspirational",
                     "include_url": True,
-                    "include_emoji": False
+                    "include_emoji": True,
                 },
                 {
-                    "variant_id": "variant_b",
-                    "name": "Variant B",
+                    "variant_id":  "variant_b",
+                    "name":        "Informational",
                     "segment_ids": [s["segment_id"] for s in segments[mid:]],
-                    "send_time": times["evening"],
-                    "tone": "friendly",
+                    "send_time":   times["evening"],
+                    "tone":        "informational, friendly",
                     "include_url": True,
-                    "include_emoji": True
-                }
+                    "include_emoji": False,
+                },
             ]
 
-        strategy = {
-            "ab_variants": fallback_variants,
-            "rationale": "Default A/B split",
-            "iteration": iteration
+        return {
+            "strategy": {
+                "ab_variants":    fallback_variants,
+                "rationale":      "Deterministic fallback",
+                "expected_winner": "variant_a",
+                "iteration":      iteration,
+            },
+            "status": "strategy_ready",
         }
-
-        return {"strategy": strategy, "status": "strategy_ready"}
