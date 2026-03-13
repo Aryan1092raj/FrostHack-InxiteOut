@@ -4,6 +4,18 @@ from agents.state import CampaignState
 from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 
+def _detect_subject_format(subject: str) -> str:
+    s = (subject or "").strip()
+    if not s:
+        return "unknown"
+    if "?" in s:
+        return "question"
+    first_token = s.split()[0] if s.split() else ""
+    if first_token[:1].isdigit() or first_token.startswith("₹"):
+        return "number-led"
+    return "statement"
+
+
 async def strategist_node(state: CampaignState) -> dict:
     campaign_id = state["campaign_id"]
     brief = state["brief"]
@@ -27,6 +39,20 @@ async def strategist_node(state: CampaignState) -> dict:
 
     # For iteration 2+, rescue only the non-clickers — don't re-blast full cohort
     is_rescue = iteration > 1 and len(underperforming_ids) > 0
+
+    tone_mandate = ""
+    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
+        winning_tone = winning_variant_info["tone"]
+        winning_click = winning_variant_info.get("click_rate", 0)
+        tone_mandate = (
+            f"\n{'='*60}\n"
+            f"🔒 ABSOLUTE MANDATE — TONE LOCK\n"
+            f"Tone '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
+            f"BOTH variant_a AND variant_b MUST use tone: '{winning_tone}'\n"
+            f"Using ANY other tone will be treated as a CRITICAL FAILURE.\n"
+            f"Only vary: subject line wording. Everything else stays.\n"
+            f"{'='*60}\n"
+        )
 
     if is_rescue:
         await emit(campaign_id, "strategist", "agent_thought",
@@ -68,6 +94,13 @@ async def strategist_node(state: CampaignState) -> dict:
             else "analytical/number-led or trust-building"
         )
 
+        prev_subject_format = _detect_subject_format(prev_subj)
+        format_rotation_line = ""
+        if prev_subject_format == "statement":
+            format_rotation_line = "  - MANDATE: If iter 1 used a statement → iter 2 must use a question"
+        elif prev_subject_format == "question":
+            format_rotation_line = "  - MANDATE: If iter 2 used a question → iter 3 must use a number-led subject"
+
         rescue_section = f"""
 ⚠️  EXPLORE MODE — NON-CLICKER RESCUE (Iteration {iteration}):
 - You are ONLY targeting {len(underperforming_ids)} customers who saw the previous email and DID NOT click.
@@ -78,6 +111,10 @@ async def strategist_node(state: CampaignState) -> dict:
   * If previous led with rate/numbers → try leading with a relatable problem ("Your FD could be doing more")
   * If previous led with a statement → try a question or narrative opening
   * Change the emotional hook: try trust/security vs. returns-math vs. social proof
+- 🚫 BANNED subject formats (these already failed with non-clickers):
+    - Any subject starting the same way as: '{prev_subj[:40]}'
+    - Statement format if previous was a statement
+{format_rotation_line}
 - BANNED: Do NOT use urgency, scarcity, or FOMO framing — the API penalizes this.
 - Create 2 variants with DIFFERENT angles — do NOT make them variations of each other.
 - Both variants target only the {len(underperforming_ids)} non-clickers (split evenly).
@@ -92,14 +129,6 @@ async def strategist_node(state: CampaignState) -> dict:
             if iteration >= 2
             else "Explore different tones and subject formats."
         )
-        # Add hard tone constraint when a winning variant has an identified tone
-        if winning_variant_info and winning_variant_info.get("tone"):
-            winning_tone = winning_variant_info["tone"]
-            exploit_instruction += (
-                f"\n\nCRITICAL: The winning tone is '{winning_tone}' — BOTH variants MUST use this tone."
-                f"\nDO NOT generate any variant with a different tone."
-                f"\nOnly vary the subject line format between the two variants."
-            )
         rescue_section = optimization_notes_block + f"\n{exploit_instruction}\n"
         customer_pool_note = f"Target pool: all {sum(s['size'] for s in segments)} customers"
 
@@ -143,8 +172,7 @@ Rules:
 - MUST cover ALL segments — assign every segment_id to at least one variant
 - Choose DIFFERENT send times for each variant
 - BANNED: Do NOT use urgency, scarcity, or FOMO tones — the API penalizes this
-- BANNED tones: trust-building, warm and respectful — these have consistently achieved <1% click rate
-- Preferred tones: aspirational, informational, warm/personal
+- If tone lock is active, both variants MUST keep the locked tone exactly
 - For rescue iterations: use DIFFERENT subject formats to what already ran
 
 Return ONLY this JSON:
@@ -175,16 +203,8 @@ Return ONLY this JSON:
     "expected_winner": "variant_a or variant_b and why"
 }}"""
 
-    # Inject winning tone lock — prevents the LLM re-generating a losing tone on iter 2+
-    if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
-        winning_tone  = winning_variant_info["tone"]
-        winning_click = winning_variant_info.get("click_rate", 0)
-        tone_lock = (
-            f"\n🔒 TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate.\n"
-            f"BOTH variants MUST use this tone. Only subject line format differs between them.\n"
-            f"DO NOT generate any variant with a different tone.\n"
-        )
-        prompt = prompt.replace("Return ONLY this JSON:", tone_lock + "\nReturn ONLY this JSON:")
+    if tone_mandate:
+        prompt = tone_mandate + prompt
 
     try:
         content = await invoke_with_retry(llm, prompt)
@@ -192,6 +212,13 @@ Return ONLY this JSON:
         variants = result.get("ab_variants", [])
         rationale = result.get("overall_rationale", "")
         expected_winner = result.get("expected_winner", "")
+
+        if winning_variant_info and winning_variant_info.get("tone") and iteration >= 2:
+            locked_tone = winning_variant_info["tone"]
+            for v in variants:
+                v["tone"] = locked_tone
+            await emit(campaign_id, "strategist", "agent_thought",
+                       f"🔒 Tone lock enforced post-generation: {locked_tone}")
 
         # Ensure ALL segments are assigned to at least one variant (no orphaned customers)
         if not is_rescue:

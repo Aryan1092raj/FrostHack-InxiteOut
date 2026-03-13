@@ -10,7 +10,12 @@ KEY CHANGES:
 import json
 from agents.state import CampaignState
 from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
-from db.database import increment_campaign_iteration, get_reports_by_external_ids
+from db.database import (
+    increment_campaign_iteration,
+    get_reports_by_external_ids,
+    record_customer_report_events,
+    get_customer_lifecycle_stats,
+)
 
 # ── After this many emails with no response, drop the customer ────────────────
 MAX_RETARGET_COUNT = 3   # customer emailed 3+ times with no click → stop targeting
@@ -86,8 +91,10 @@ async def optimizer_node(state: CampaignState) -> dict:
         if str(customer_row.get("EC", "N")).upper() == "Y":
             clicked_ids.add(cid)
 
-    # Update converted set
+    # Persist EO/EC outcomes for this iteration and update converted set
+    record_customer_report_events(campaign_id, iteration, all_report_rows)
     all_converted.update(clicked_ids)
+    customer_stats = get_customer_lifecycle_stats(campaign_id)
 
     # ── Smart non-clicker segmentation ────────────────────────────────────────
     # Bucket 1: Opened but didn't click → body/CTA problem
@@ -111,16 +118,23 @@ async def optimizer_node(state: CampaignState) -> dict:
     await emit(campaign_id, "optimizer", "agent_thought",
                f"   • Converted (EC=Y, skip forever): {len(all_converted)}")
 
-    # ── Re-target cap: drop customers emailed MAX_RETARGET_COUNT+ times ───────
-    # Track per-customer email count using iteration number as proxy
-    # Simple rule: if iteration >= MAX_RETARGET_COUNT, drop never-openers
-    # (they've proven unresponsive — spending calls on them hurts our rate)
+    # ── Re-target cap: drop permanently cold customers using real customer history ───────
+    # Rule: from iteration 3 onward, remove customers who have already been emailed
+    # 2+ times and have NEVER opened even once.
     if iteration >= MAX_RETARGET_COUNT:
-        dropped = len(never_opened)
-        never_opened = []   # stop targeting completely cold leads
+        permanently_cold = [
+            cid for cid in never_opened
+            if customer_stats.get(cid, {}).get("sent_count", 0) >= 2
+            and customer_stats.get(cid, {}).get("opened_count", 0) == 0
+        ]
+        cold_set = set(permanently_cold)
+        never_opened = [
+            cid for cid in never_opened
+            if cid not in cold_set
+        ]
         await emit(campaign_id, "optimizer", "agent_thought",
-                   f"🚫 Re-target cap reached (iter {iteration} ≥ {MAX_RETARGET_COUNT}): "
-                   f"dropping {dropped} never-opened customers. Focus only on openers.")
+                   f"🗑️ Dropped {len(permanently_cold)} permanently cold customers "
+                   f"(never opened after 2 attempts).")
 
     # ── Stop conditions ────────────────────────────────────────────────────────
     # With 1000-customer cohort, scoring is absolute EC=Y + EO=Y count

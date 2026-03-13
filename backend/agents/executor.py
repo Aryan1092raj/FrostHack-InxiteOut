@@ -9,7 +9,7 @@ status to "error" on exception, but now we return cleanly with useful info.
 from agents.state import CampaignState
 from agents.base import emit
 from tools.campaignx_tools import tool_send_campaign
-from db.database import update_campaign_status
+from db.database import update_campaign_status, record_customers_emailed
 
 
 async def executor_node(state: CampaignState) -> dict:
@@ -108,6 +108,7 @@ async def executor_node(state: CampaignState) -> dict:
             ext_id = result.get("campaign_id", "")
             external_campaign_ids.append(ext_id)
             new_emailed.update(customer_ids)
+            record_customers_emailed(campaign_id, customer_ids, iteration)
             await emit(campaign_id, "executor", "action",
                        f"✅ {variant} sent! External campaign ID: {ext_id}")
 

@@ -93,6 +93,22 @@ def init_db():
         )
     """)
 
+    # ── Per-Customer Iteration Events ────────────────────────────────────────
+    # Tracks sent/open/click at customer granularity per iteration.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS customer_iteration_events (
+            campaign_id TEXT NOT NULL,
+            customer_id TEXT NOT NULL,
+            iteration_number INTEGER NOT NULL,
+            emailed INTEGER DEFAULT 1,
+            opened INTEGER DEFAULT 0,
+            clicked INTEGER DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (campaign_id, customer_id, iteration_number),
+            FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("✅ Database initialized")
@@ -378,3 +394,96 @@ def clear_cohort_cache():
     conn.commit()
     conn.close()
     print("✅ Cohort cache cleared — next fetch will hit the live API")
+
+
+# ─── Per-Customer Retarget Tracking ──────────────────────────────────────────
+
+def record_customers_emailed(campaign_id: str, customer_ids: List[str],
+                             iteration_number: int):
+    """Idempotently mark customers as emailed in a campaign iteration."""
+    if not customer_ids:
+        return
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    rows = [
+        (campaign_id, cid, iteration_number, 1, 0, 0, now)
+        for cid in customer_ids if cid
+    ]
+    conn.executemany("""
+        INSERT INTO customer_iteration_events
+        (campaign_id, customer_id, iteration_number, emailed, opened, clicked, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(campaign_id, customer_id, iteration_number)
+        DO UPDATE SET
+            emailed = MAX(customer_iteration_events.emailed, excluded.emailed),
+            updated_at = excluded.updated_at
+    """, rows)
+    conn.commit()
+    conn.close()
+
+
+def record_customer_report_events(campaign_id: str, iteration_number: int,
+                                  customer_rows: List[Dict[str, Any]]):
+    """Idempotently upsert EO/EC outcomes for customers in a campaign iteration."""
+    if not customer_rows:
+        return
+
+    merged: Dict[str, Dict[str, int]] = {}
+    for row in customer_rows:
+        cid = str(row.get("customer_id", "")).strip()
+        if not cid:
+            continue
+        opened = 1 if str(row.get("EO", "N")).upper() == "Y" else 0
+        clicked = 1 if str(row.get("EC", "N")).upper() == "Y" else 0
+        prev = merged.get(cid, {"opened": 0, "clicked": 0})
+        merged[cid] = {
+            "opened": max(prev["opened"], opened),
+            "clicked": max(prev["clicked"], clicked),
+        }
+
+    if not merged:
+        return
+
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    rows = [
+        (campaign_id, cid, iteration_number, 1, vals["opened"], vals["clicked"], now)
+        for cid, vals in merged.items()
+    ]
+    conn.executemany("""
+        INSERT INTO customer_iteration_events
+        (campaign_id, customer_id, iteration_number, emailed, opened, clicked, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(campaign_id, customer_id, iteration_number)
+        DO UPDATE SET
+            emailed = MAX(customer_iteration_events.emailed, excluded.emailed),
+            opened = MAX(customer_iteration_events.opened, excluded.opened),
+            clicked = MAX(customer_iteration_events.clicked, excluded.clicked),
+            updated_at = excluded.updated_at
+    """, rows)
+    conn.commit()
+    conn.close()
+
+
+def get_customer_lifecycle_stats(campaign_id: str) -> Dict[str, Dict[str, int]]:
+    """Return per-customer cumulative sent/open/click counts for one campaign."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT customer_id,
+               SUM(emailed) AS sent_count,
+               SUM(opened) AS opened_count,
+               SUM(clicked) AS clicked_count
+        FROM customer_iteration_events
+        WHERE campaign_id = ?
+        GROUP BY customer_id
+    """, (campaign_id,)).fetchall()
+    conn.close()
+
+    return {
+        row["customer_id"]: {
+            "sent_count": int(row["sent_count"] or 0),
+            "opened_count": int(row["opened_count"] or 0),
+            "clicked_count": int(row["clicked_count"] or 0),
+        }
+        for row in rows
+    }
