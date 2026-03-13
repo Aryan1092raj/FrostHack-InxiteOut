@@ -78,6 +78,8 @@ async def invoke_with_retry(llm, prompt: str, max_retries: int = 3) -> str:
                         temperature=0.7,
                     )
                 else:
+                    if attempt >= max_retries - 1:
+                        break
                     wait = 15 * (attempt + 1)
                     print(f"[Rate limit] Attempt {attempt+1}/{max_retries}. Waiting {wait}s...")
                     await asyncio.sleep(wait)
