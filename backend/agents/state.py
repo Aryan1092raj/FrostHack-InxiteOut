@@ -19,6 +19,8 @@ class CampaignState(TypedDict):
     opt_content_adjustments:  str              # Body copy changes LLM recommends next
     status:                   str              # planning|probe_done|running|monitored|optimizing|done|error
     underperforming_customer_ids: List[str]    # Customers who did NOT click last run
+    opened_not_clicked_customer_ids: List[str] # Non-clickers who opened → fix body/CTA
+    never_opened_customer_ids: List[str]       # Non-openers → fix subject/tone
     winning_variant_info:     dict             # Best variant's subject/tone/click_rate
     all_emailed_customer_ids: List[str]        # Cumulative IDs emailed across all iterations
     all_converted_customer_ids: List[str]      # EC=Y across ALL iterations — NEVER re-target these

@@ -1,15 +1,3 @@
-"""
-monitor.py — Fetch reports and compute metrics.
-
-Issues fixed in this rewrite:
-  1. Per-iteration metrics stored separately from cumulative. The optimizer
-     receives per-iteration click_rate so its stop decisions are based on
-     "how did THIS send perform" not "average across all time including probes".
-  2. Winning variant identification uses external_campaign_id matching via
-     email["external_campaign_id"] set by executor, not fragile index pairing.
-  3. Report saved with iteration_number so the chart groups correctly.
-"""
-
 import asyncio
 from typing import Any
 from agents.state import CampaignState
@@ -19,178 +7,185 @@ from db.database import save_report, update_campaign_metrics, get_all_reports_fo
 
 
 async def monitor_node(state: CampaignState) -> dict:
-    campaign_id          = state["campaign_id"]
+    campaign_id = state["campaign_id"]
     external_campaign_ids = state.get("external_campaign_ids", [])
-    iteration            = state.get("iteration", 1)
 
     await emit(campaign_id, "monitor", "agent_thought",
-               f"Fetching reports for {len(external_campaign_ids)} campaigns "
-               f"(iteration {iteration})...")
+               f"Fetching performance reports for {len(external_campaign_ids)} campaigns...")
 
-    # Build lookup: external_id → email metadata set by executor
+    # Build lookup: external_id → email details.
+    # Prefer the explicit mapping stamped by executor; fall back to index order
+    # only for older in-flight states that predate that field.
     email_by_ext_id: dict = {}
     for email in state.get("emails", []):
-        ext_id = email.get("external_campaign_id", "")
+        ext_id = str(email.get("external_campaign_id", "")).strip()
         if ext_id:
             email_by_ext_id[ext_id] = email
+    if not email_by_ext_id:
+        for i, ext_id in enumerate(external_campaign_ids):
+            if i < len(state.get("emails", [])):
+                email_by_ext_id[ext_id] = state["emails"][i]
 
-    # Small wait for gamified metrics to register
+    # Small wait to allow gamified metrics to register
     await asyncio.sleep(2)
 
-    # ── Fetch and aggregate per-iteration metrics ─────────────────────────────
-    current: dict[str, Any] = {
-        "open_rate":    0.0,
-        "click_rate":   0.0,
-        "total_sent":   0,
-        "opens":        0,
-        "clicks":       0,
-        "per_campaign": [],
+    # ── Current iteration metrics ─────────────────────────────────────────────────────
+    current_metrics: dict[str, Any] = {
+        "open_rate": 0.0,
+        "click_rate": 0.0,
+        "total_sent": 0,
+        "opens": 0,
+        "clicks": 0,
+        "per_campaign": []
     }
 
     for ext_id in external_campaign_ids:
         await emit(campaign_id, "monitor", "action",
-                   f"Fetching report for {ext_id[:12]}...")
+                   f"Fetching report for campaign {ext_id}...")
 
         result = tool_get_report(ext_id)
 
         if "error" in result:
             await emit(campaign_id, "monitor", "agent_thought",
-                       f"⚠️ Report error for {ext_id[:12]}: {result['error']}")
+                       f"⚠️ Report issue for {ext_id}: {result['error']}")
             continue
 
-        computed   = result.get("computed_metrics", {})
-        open_rate  = computed.get("open_rate", 0.0)
+        computed = result.get("computed_metrics", {})
+        open_rate = computed.get("open_rate", 0.0)
         click_rate = computed.get("click_rate", 0.0)
-        total      = computed.get("total_sent", 0)
-        opens      = computed.get("opens", 0)
-        clicks     = computed.get("clicks", 0)
+        total = computed.get("total_sent", 0)
+        opens = computed.get("opens", 0)
+        clicks = computed.get("clicks", 0)
 
-        current["total_sent"] += total
-        current["opens"]      += opens
-        current["clicks"]     += clicks
+        # Accumulate current iteration
+        current_metrics["total_sent"] += total
+        current_metrics["opens"] += opens
+        current_metrics["clicks"] += clicks
 
-        email_meta = email_by_ext_id.get(ext_id, {})
-        current["per_campaign"].append({
+        email_info = email_by_ext_id.get(ext_id, {})
+        current_metrics["per_campaign"].append({
             "external_campaign_id": ext_id,
-            "open_rate":            open_rate,
-            "click_rate":           click_rate,
-            "total_sent":           total,
-            "opens":                opens,
-            "clicks":               clicks,
-            "subject":              email_meta.get("subject", ""),
-            "tone":                 email_meta.get("tone", ""),
-            "variant":              email_meta.get("variant", ""),
-            "customer_ids":         email_meta.get("customer_ids", []),
+            "open_rate": open_rate,
+            "click_rate": click_rate,
+            "total_sent": total,
+            "opens": opens,
+            "clicks": clicks,
+            "subject": email_info.get("subject", ""),
+            "tone": email_info.get("tone", ""),
+            "variant": email_info.get("variant", ""),
+            "customer_ids": email_info.get("customer_ids", []),
         })
 
-        # Save to DB with iteration_number for chart grouping
-        save_report(
-            campaign_id=campaign_id,
-            external_id=ext_id,
-            open_rate=open_rate,
-            click_rate=click_rate,
-            total_sent=total,
-            raw_report=result,
-            iteration_number=iteration,
-        )
+        # Save to DB (with opens/clicks and iteration number for chart grouping)
+        save_report(campaign_id, ext_id, open_rate, click_rate, total, result,
+                    iteration_number=state.get("iteration", 1))
 
         await emit(campaign_id, "monitor", "agent_thought",
-                   f"📊 {ext_id[:12]}...: Open {open_rate:.1%} | "
-                   f"Click {click_rate:.1%} | Sent {total}")
+                   f"📊 Campaign {ext_id[:8]}...: "
+                   f"Open {open_rate:.1%} | Click {click_rate:.1%} | "
+                   f"Sent {total}")
 
-    # Compute rates for THIS iteration
-    if current["total_sent"] > 0:
-        current["open_rate"]  = round(current["opens"]  / current["total_sent"], 4)
-        current["click_rate"] = round(current["clicks"] / current["total_sent"], 4)
-
-    # ── Cumulative metrics (for header stats display) ─────────────────────────
+    # ── FIX: Compute CUMULATIVE metrics across ALL iterations ─────────────────
+    # Load all historical reports for this campaign from DB
     try:
-        historical      = get_all_reports_for_campaign(campaign_id)
-        cum_sent        = sum(r.get("total_sent", 0) for r in historical)
-        cum_opens       = sum(r.get("opens",      0) for r in historical)
-        cum_clicks      = sum(r.get("clicks",     0) for r in historical)
-        cum_open_rate   = round(cum_opens  / cum_sent, 4) if cum_sent > 0 else 0
-        cum_click_rate  = round(cum_clicks / cum_sent, 4) if cum_sent > 0 else 0
-    except Exception:
-        cum_sent       = current["total_sent"]
-        cum_opens      = current["opens"]
-        cum_clicks     = current["clicks"]
-        cum_open_rate  = current["open_rate"]
-        cum_click_rate = current["click_rate"]
+        all_historical = get_all_reports_for_campaign(campaign_id)
+        cumulative_sent = sum(r.get("total_sent", 0) for r in all_historical)
+        cumulative_opens = sum(r.get("opens", 0) for r in all_historical)
+        cumulative_clicks = sum(r.get("clicks", 0) for r in all_historical)
+    except Exception as e:
+        print(f"[Monitor] Could not load historical reports: {e}. Using current iteration only.")
+        cumulative_sent = current_metrics["total_sent"]
+        cumulative_opens = current_metrics["opens"]
+        cumulative_clicks = current_metrics["clicks"]
 
-    # ── LLM analysis ──────────────────────────────────────────────────────────
+    all_metrics = dict(current_metrics)  # keep per_campaign from current iteration
+    all_metrics["total_sent"] = cumulative_sent
+    all_metrics["opens"] = cumulative_opens
+    all_metrics["clicks"] = cumulative_clicks
+
+    if cumulative_sent > 0:
+        all_metrics["open_rate"] = round(cumulative_opens / cumulative_sent, 4)
+        all_metrics["click_rate"] = round(cumulative_clicks / cumulative_sent, 4)
+    elif current_metrics["total_sent"] > 0:
+        all_metrics["open_rate"] = round(current_metrics["opens"] / current_metrics["total_sent"], 4)
+        all_metrics["click_rate"] = round(current_metrics["clicks"] / current_metrics["total_sent"], 4)
+
+    # ── LLM analysis ───────────────────────────────────────────────────────────────────
     llm = get_llm(temperature=0.3)
-    per_campaign_clean = [
+    iteration = state.get("iteration", 1)
+    per_campaign_for_analysis = [
         {k: v for k, v in pc.items() if k != "customer_ids"}
-        for pc in current["per_campaign"]
+        for pc in current_metrics["per_campaign"]
     ]
+    analysis_prompt = f"""Analyze these email campaign results for XDeposit:
 
-    analysis_prompt = f"""Analyse these email campaign results for XDeposit:
+Overall Cumulative Metrics (across all {iteration} iteration(s)):
+- Open Rate: {all_metrics['open_rate']:.1%}
+- Click Rate: {all_metrics['click_rate']:.1%}
+- Total Sent: {all_metrics['total_sent']}
 
-Iteration {iteration} metrics:
-- Open Rate:  {current['open_rate']:.1%}  ({current['opens']} customers opened)
-- Click Rate: {current['click_rate']:.1%} ({current['clicks']} customers clicked)
-- Total Sent: {current['total_sent']}
+Current Iteration Metrics:
+- Sent this iteration: {current_metrics['total_sent']}
+- Open rate this iteration: {round(current_metrics['opens'] / current_metrics['total_sent'], 4) if current_metrics['total_sent'] else 0:.1%}
+- Click rate this iteration: {round(current_metrics['clicks'] / current_metrics['total_sent'], 4) if current_metrics['total_sent'] else 0:.1%}
 
-Cumulative across all iterations:
-- Open Rate:  {cum_open_rate:.1%}
-- Click Rate: {cum_click_rate:.1%}
-- Total Sent: {cum_sent}
-
-Per-campaign breakdown:
-{per_campaign_clean}
+Per-Campaign Breakdown (this iteration):
+{per_campaign_for_analysis}
 
 Campaign Brief: {state['brief']}
+Current Iteration: {iteration}
 
-Give a 2-3 sentence analysis. Focus on:
-1. Which variant performed better and why
-2. What specifically should change in the next iteration
-3. Click rate matters 70% — what is dragging it down?"""
+Provide a 2-3 sentence analysis of performance and what needs improvement.
+Focus on click rate (it's weighted 70% in scoring).
+Be specific about which segments or variants underperformed."""
 
     try:
-        analysis = await invoke_with_retry(llm, analysis_prompt)
-    except Exception:
+        analysis_raw = await invoke_with_retry(llm, analysis_prompt)
+        analysis = analysis_raw.strip()
+    except Exception as e:
+        print(f"[Monitor] LLM analysis failed: {e}")
+        await emit(campaign_id, "monitor", "agent_thought",
+                   f"⚠️ LLM analysis failed ({type(e).__name__}): {str(e)[:100]}. Using fallback.")
         analysis = (
-            f"Iteration {iteration}: Open {current['open_rate']:.1%}, "
-            f"Click {current['click_rate']:.1%}. "
-            f"{'Click rate needs improvement.' if current['click_rate'] < 0.20 else 'Performance acceptable.'}"
+            f"Cumulative open rate {all_metrics['open_rate']:.1%}, "
+            f"click rate {all_metrics['click_rate']:.1%} across {all_metrics['total_sent']} emails. "
+            f"Current iteration ({iteration}) targeted {current_metrics['total_sent']} customers. "
+            f"Optimization needed to improve click-through engagement."
         )
 
+    all_metrics["analysis"] = analysis
+
+    # Update DB with cumulative metrics
+    update_campaign_metrics(campaign_id, {
+        "open_rate": all_metrics["open_rate"],
+        "click_rate": all_metrics["click_rate"],
+        "total_sent": all_metrics["total_sent"],
+        "opens": all_metrics["opens"],
+        "clicks": all_metrics["clicks"],
+        "analysis": analysis
+    })
+
     await emit(campaign_id, "monitor", "agent_thought",
-               f"📈 Iteration {iteration} — Open: {current['open_rate']:.1%} | "
-               f"Click: {current['click_rate']:.1%}")
-    await emit(campaign_id, "monitor", "agent_thought", f"🔍 Analysis: {analysis}")
+               f"📈 Cumulative: Open {all_metrics['open_rate']:.1%} | "
+               f"Click {all_metrics['click_rate']:.1%} | "
+               f"Total Sent {all_metrics['total_sent']}")
+    await emit(campaign_id, "monitor", "agent_thought",
+               f"🔍 Analysis: {analysis}")
+    # Expose per-iteration rates alongside cumulative so the optimizer LLM
+    # prompt can show "this iteration" vs "all-time" without confusion.
+    if current_metrics["total_sent"] > 0:
+        all_metrics["current_open_rate"]  = round(current_metrics["opens"]  / current_metrics["total_sent"], 4)
+        all_metrics["current_click_rate"] = round(current_metrics["clicks"] / current_metrics["total_sent"], 4)
+    else:
+        all_metrics["current_open_rate"]  = all_metrics["open_rate"]
+        all_metrics["current_click_rate"] = all_metrics["click_rate"]
 
-    # Store cumulative in campaign record (for header display)
-    # Store per-iteration in metrics dict (for optimizer decisions)
-    cumulative_for_display = {
-        "open_rate":    cum_open_rate,
-        "click_rate":   cum_click_rate,
-        "total_sent":   cum_sent,
-        "opens":        cum_opens,
-        "clicks":       cum_clicks,
-        "per_campaign": current["per_campaign"],  # current iteration breakdown
-        "analysis":     analysis,
-    }
-    update_campaign_metrics(campaign_id, cumulative_for_display)
+    await emit(campaign_id, "monitor", "metric_update",
+               "Metrics updated",
+               data={
+                   "open_rate": all_metrics["open_rate"],
+                   "click_rate": all_metrics["click_rate"],
+                   "total_sent": all_metrics["total_sent"]
+               })
 
-    # Metrics passed to optimizer uses PER-ITERATION rates, not cumulative
-    # This prevents the optimizer from making stop decisions based on diluted averages
-    optimizer_metrics = {
-        "open_rate":    current["open_rate"],
-        "click_rate":   current["click_rate"],
-        "total_sent":   current["total_sent"],
-        "opens":        current["opens"],
-        "clicks":       current["clicks"],
-        "per_campaign": current["per_campaign"],
-        "analysis":     analysis,
-        # Also pass cumulative for context
-        "cumulative_open_rate":  cum_open_rate,
-        "cumulative_click_rate": cum_click_rate,
-        "cumulative_sent":       cum_sent,
-    }
-
-    return {
-        "metrics": optimizer_metrics,
-        "status":  "monitored",
-    }
+    return {"metrics": all_metrics, "status": "monitored"}

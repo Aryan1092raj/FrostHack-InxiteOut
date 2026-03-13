@@ -87,6 +87,7 @@ async def content_gen_node(state: CampaignState) -> dict:
         include_emoji       = variant.get("include_emoji", True)
         include_url         = variant.get("include_url", True)
         direct_customer_ids = variant.get("direct_customer_ids", [])
+        strategy_notes      = variant.get("strategy_notes", "")
 
         # ── Resolve customer IDs ──────────────────────────────────────────────
         if direct_customer_ids:
@@ -177,14 +178,29 @@ async def content_gen_node(state: CampaignState) -> dict:
                 f"  Apply these — they are based on real click data.\n"
             )
 
+        strategy_block = ""
+        if strategy_notes:
+            strategy_block = (
+                f"\n\U0001F4CB VARIANT EXECUTION NOTES (hard requirements from strategist):\n"
+                f"  {strategy_notes}\n"
+                f"  Follow these notes exactly.\n"
+            )
+
         winning_block = ""
         if winning_variant and winning_variant.get("tone") and iteration >= 2:
             winning_tone  = winning_variant["tone"]
             winning_click = winning_variant.get("click_rate", 0)
-            winning_block = (
-                f"\n\U0001F512 TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate. "
-                f"This variant MUST use tone: '{winning_tone}'. Do NOT deviate.\n"
-            )
+            if tone == winning_tone:
+                winning_block = (
+                    f"\n\U0001F512 TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate. "
+                    f"This variant MUST use tone: '{winning_tone}'. Do NOT deviate.\n"
+                )
+            else:
+                winning_block = (
+                    f"\n\U0001F9EA CHALLENGER TONE: the previous winning tone was '{winning_tone}', "
+                    f"but this variant MUST stay in the alternate tone '{tone}' for learning. "
+                    f"Do NOT drift back to the winning tone.\n"
+                )
 
         seed_block = ""
         seed = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
@@ -209,6 +225,7 @@ Target Segments:
 {occupation_block}
 {thompson_block}
 {optimizer_block}
+{strategy_block}
 {winning_block}
 {seed_block}
 
@@ -264,6 +281,7 @@ Return ONLY valid JSON — no markdown, no backticks, no explanation:
             "customer_ids": customer_ids,
             "send_time":    send_time,
             "tone":         tone,
+            "strategy_notes": strategy_notes,
             "segment_ids":  segment_ids,
         })
 
