@@ -1,30 +1,36 @@
 """
-Content Gen — Updated to use:
-  Innovation #2: Email DNA winning pattern (hard constraints from probe correlation)
-  Innovation #3: Occupation angle per segment (psychological messaging)
-  Innovation #1: Thompson winner context (don't repeat losers' patterns)
+content_gen.py — Email content generation.
+
+Root fixes in this rewrite:
+  1. Fallback templates use proper Unicode codepoints (\\U0001F449) not surrogates.
+  2. No markdown ** in body — HTML <b> only so email clients render correctly.
+  3. Prompt bans FOMO language, enforces 120-word limit, enforces <b> not **.
+  4. Customer ID resolution deduplicates across variants before any send.
+  5. Surrogate stripping removed here — base.py invoke_with_retry handles it.
+  6. Segment context only built from segments the variant actually covers.
 """
 
 import json
 import random
 from agents.state import CampaignState
-from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry, strip_invalid_unicode
+from agents.base import emit, get_llm, clean_llm_json, invoke_with_retry
 
 XDEPOSIT_URL = "https://superbfsi.com/xdeposit/explore/"
 
-# ── Seed templates — LLM improves on these, not a blank page ─────────────────
+# ── Fallback templates ────────────────────────────────────────────────────────
+# Use proper Unicode codepoints — NOT surrogate pairs like \ud83d\udc49
 FALLBACK_TEMPLATES = [
     {
-        "subject": "Your FD is earning 1% less than it should 💰",
+        "subject": "Your FD is earning 1% less than it should",
         "body": (
             f"Hi,\n\n"
             f"Your fixed deposit could be working harder for you.\n\n"
-            f"XDeposit from SuperBFSI gives you <b>1% higher returns</b> than most "
-            f"competitors \u2014 that\u2019s \u20b91,000 extra per year on every \u20b91 lakh deposited.\n\n"
+            f"\U0001F449 <a href=\"{XDEPOSIT_URL}\">See what XDeposit pays you</a>\n\n"
+            f"XDeposit from SuperBFSI gives you <b>1% higher returns</b> than most competitors "
+            f"\u2014 that\u2019s \u20b91,000 extra per year on every \u20b91 lakh deposited.\n\n"
             f"Senior women get an <b>additional 0.25%</b> on top.\n\n"
-            f"👉 <a href=\"{XDEPOSIT_URL}\">See what XDeposit pays you</a>\n\n"
-            f"No lock-in surprises. RBI-regulated. Trusted by thousands.\n\n"
-            f"👉 {XDEPOSIT_URL}\n\n"
+            f"No lock-in surprises. RBI-regulated.\n\n"
+            f"\U0001F449 {XDEPOSIT_URL}\n\n"
             f"\u2014 SuperBFSI Team"
         ),
     },
@@ -32,12 +38,12 @@ FALLBACK_TEMPLATES = [
         "subject": "Is your money earning what it deserves?",
         "body": (
             f"Hi,\n\n"
-            f"Most FDs pay the same rate they did years ago.\n\n"
-            f"XDeposit pays <b>1 percentage point more</b> \u2014 and for senior women, "
+            f"\U0001F449 <a href=\"{XDEPOSIT_URL}\">Calculate your XDeposit earnings</a>\n\n"
+            f"Most FDs pay the same rate they did years ago. XDeposit pays "
+            f"<b>1 percentage point more</b> \u2014 and for senior women, "
             f"an extra 0.25% on top of that.\n\n"
-            f"Simple math: more return, same safety, same bank guarantee.\n\n"
-            f"👉 <a href=\"{XDEPOSIT_URL}\">Calculate your XDeposit earnings</a>\n\n"
-            f"👉 {XDEPOSIT_URL}\n\n"
+            f"Same safety. Same guarantee. More return.\n\n"
+            f"\U0001F449 {XDEPOSIT_URL}\n\n"
             f"\u2014 SuperBFSI"
         ),
     },
@@ -45,171 +51,188 @@ FALLBACK_TEMPLATES = [
 
 
 async def content_gen_node(state: CampaignState) -> dict:
-    campaign_id     = state["campaign_id"]
-    brief           = state["brief"]
-    strategy        = state["strategy"]
-    segments        = state.get("segments", [])
-    iteration       = state.get("iteration", 1)
+    campaign_id      = state["campaign_id"]
+    brief            = state["brief"]
+    strategy         = state["strategy"]
+    segments         = state.get("segments", [])
+    iteration        = state.get("iteration", 1)
     rejection_reason = state.get("rejection_reason", "")
-    winning_variant = state.get("winning_variant_info", {})
-    dna_rules       = state.get("dna_content_rules", "")   # Innovation #2
-    thompson_winner = state.get("thompson_winner", {})     # Innovation #1
-    opt_subject     = state.get("opt_subject_strategy", "")
-    opt_content     = state.get("opt_content_adjustments", "")
+    winning_variant  = state.get("winning_variant_info", {})
+    dna_rules        = state.get("dna_content_rules", "")
+    thompson_winner  = state.get("thompson_winner", {})
+    opt_subject      = state.get("opt_subject_strategy", "")
+    opt_content      = state.get("opt_content_adjustments", "")
 
     await emit(campaign_id, "content_gen", "agent_thought",
                f"Generating email content (iteration {iteration})...")
 
     if dna_rules:
         await emit(campaign_id, "content_gen", "agent_thought",
-                   "🧬 DNA-constrained writing active — using probe-learned signal.")
-    if thompson_winner:
-        await emit(campaign_id, "content_gen", "agent_thought",
-                   f"🏆 Thompson winner context loaded: '{thompson_winner.get('probe_id')}' "
-                   f"(click: {thompson_winner.get('click_rate', 0):.1%})")
+                   "🧬 DNA-constrained writing active.")
 
     variants = strategy.get("ab_variants", [])
     seg_map  = {s["segment_id"]: s for s in segments}
+    llm      = get_llm(temperature=0.6)
+    emails   = []
 
-    llm    = get_llm(temperature=0.6)
-    emails = []
+    # Track customer IDs used across ALL variants this iteration
+    # to prevent the same customer getting emailed twice
+    used_customer_ids: set[str] = set()
 
     for variant in variants:
-        variant_id         = variant.get("variant_id", "variant_a")
-        segment_ids        = variant.get("segment_ids", [])
-        send_time          = variant.get("send_time", "")
-        tone               = variant.get("tone", "professional")
-        include_emoji      = variant.get("include_emoji", True)
-        include_url        = variant.get("include_url", True)
+        variant_id          = variant.get("variant_id", "variant_a")
+        segment_ids         = variant.get("segment_ids", [])
+        send_time           = variant.get("send_time", "")
+        tone                = variant.get("tone", "informational, friendly")
+        include_emoji       = variant.get("include_emoji", True)
+        include_url         = variant.get("include_url", True)
         direct_customer_ids = variant.get("direct_customer_ids", [])
+        strategy_notes      = variant.get("strategy_notes", "")
 
-        # Resolve customer IDs
+        # ── Resolve customer IDs ──────────────────────────────────────────────
         if direct_customer_ids:
-            customer_ids = direct_customer_ids
+            raw_ids = list(direct_customer_ids)
         else:
-            customer_ids = []
+            raw_ids = []
             for sid in segment_ids:
                 seg = seg_map.get(sid)
                 if seg:
-                    customer_ids.extend(seg.get("customer_ids", []))
+                    raw_ids.extend(seg.get("customer_ids", []))
+
+        # Deduplicate within this variant and across variants
+        customer_ids = []
+        for cid in raw_ids:
+            if cid not in used_customer_ids:
+                customer_ids.append(cid)
+                used_customer_ids.add(cid)
 
         if not customer_ids:
             await emit(campaign_id, "content_gen", "agent_thought",
-                       f"⚠️  {variant_id} has no customers — skipping.")
+                       f"⚠️ {variant_id} has no customers after dedup — skipping.")
             continue
 
         await emit(campaign_id, "content_gen", "agent_thought",
                    f"Writing {variant_id} for {len(customer_ids)} customers "
                    f"(tone: {tone}, emoji: {include_emoji})...")
 
-        # ── Build rich segment context ─────────────────────────────────────────
-        seg_descriptions   = []
-        has_special_offer  = False
-        occupation_angles  = []
+        # ── Segment context ───────────────────────────────────────────────────
+        seg_descriptions  = []
+        has_special_offer = False
+        occupation_hints  = []
 
         for sid in segment_ids:
             seg = seg_map.get(sid)
             if not seg:
                 continue
-
-            desc = f"- {seg['name']} ({seg['size']} customers"
+            parts = [f"- {seg['name']} ({seg['size']} customers"]
             if seg.get("avg_age"):
-                desc += f", avg age {seg['avg_age']}"
-            if seg.get("avg_income"):
-                desc += f", avg income ₹{seg['avg_income']:,.0f}"
+                parts.append(f"avg age {seg['avg_age']}")
             if seg.get("top_city"):
-                desc += f", top city {seg['top_city']}"
-            desc += f") — angle: {seg.get('key_angle', '')}"
-            seg_descriptions.append(desc)
+                parts.append(f"top city {seg['top_city']}")
+            parts.append(f"angle: {seg.get('key_angle', '')}")
+            seg_descriptions.append(", ".join(parts) + ")")
 
             if seg.get("special_offer"):
                 has_special_offer = True
 
-            # Innovation #3: include occupation psychological angle
             occ_angle = seg.get("occupation_angle", {})
-            if occ_angle and occ_angle.get("trigger"):
-                occupation_angles.append(
-                    f"{seg['dominant_occupation']}: trigger='{occ_angle['trigger']}', "
-                    f"message='{occ_angle['message']}'"
+            if occ_angle.get("trigger"):
+                occupation_hints.append(
+                    f"  Occupation trigger: '{occ_angle['trigger']}' → "
+                    f"message: '{occ_angle['message']}'"
                 )
 
+        # ── Prompt blocks ─────────────────────────────────────────────────────
         special_offer_block = ""
         if has_special_offer:
             special_offer_block = (
-                "\n🌟 MANDATORY: This segment contains FEMALE SENIOR CITIZENS. "
-                "You MUST prominently mention the EXTRA 0.25 percentage point bonus "
-                "for female senior citizens in the FIRST SENTENCE of the body. "
-                "This is their unique exclusive benefit — open with it.\n"
+                "\n\U0001F31F MANDATORY for this segment: The FIRST sentence of the body "
+                "MUST mention the EXTRA 0.25 percentage point bonus for female senior citizens. "
+                "This is their exclusive offer.\n"
             )
 
         occupation_block = ""
-        if occupation_angles:
+        if occupation_hints:
             occupation_block = (
-                "\nOccupation Psychology (use these psychological triggers in body copy):\n"
-                + "\n".join(f"  • {a}" for a in occupation_angles)
-                + "\n"
+                "\nOccupation psychology for this segment:\n"
+                + "\n".join(occupation_hints) + "\n"
             )
-        # ── Optimizer directives (Bug 3 fix: analysis NOW reaches the copy writer) ────────
-        optimizer_directives_block = ""
-        if iteration > 1 and (opt_subject or opt_content):
-            optimizer_directives_block = (
-                f"\n\u26a0\ufe0f  REQUIRED CONTENT DIRECTIVES FROM PERFORMANCE ANALYSIS:\n"
-                f"  These are NOT suggestions — you MUST follow them:\n"
-            )
-            if opt_subject:
-                optimizer_directives_block += f"  • Subject format: {opt_subject}\n"
-            if opt_content:
-                optimizer_directives_block += f"  • Body copy changes: {opt_content}\n"
 
-        # ── Seed template to anchor LLM output ─────────────────────────────
-        # Pick the template most relevant to this segment (special offer = template 0)
-        seed_tmpl = FALLBACK_TEMPLATES[0] if has_special_offer else FALLBACK_TEMPLATES[1]
-        seed_block = (
-            f"\n🎯 SEED TEMPLATE (improve on this — do NOT copy verbatim):\n"
-            f"  Subject: \"{seed_tmpl['subject']}\"\n"
-            f"  Body excerpt: \"{seed_tmpl['body'][:200]}...\"\n"
-            f"  Your output MUST be more specific, more personalised, and stronger CTA.\n"
-        )
-        # Innovation #1: Thompson winner context
         thompson_block = ""
-        if thompson_winner and iteration == 1:
+        if thompson_winner and thompson_winner.get("subject"):
             thompson_block = (
-                f"\n🏆 PROBE WINNER — REPLICATE THIS FORMULA EXACTLY:\n"
-                f"  Subject: '{thompson_winner.get('subject', '')[:80]}'\n"
+                f"\n\U0001F3C6 PROVEN WINNER from probe phase — REPLICATE this formula:\n"
+                f"  Subject structure: '{thompson_winner['subject'][:80]}'\n"
                 f"  Tone: {thompson_winner.get('tone', '')}\n"
                 f"  Dimension that won: {thompson_winner.get('dimension', '')}\n"
                 f"  Click rate: {thompson_winner.get('click_rate', 0):.1%}\n"
-                f"  INSTRUCTION: Your variant_a MUST follow the same formula — "
-                f"same tone, same CTA position, same emoji density. Only change subject wording slightly.\n"
-            )
-        elif winning_variant and iteration > 1:
-            thompson_block = (
-                f"\n🏆 PREVIOUS WINNING SUBJECT: '{winning_variant.get('subject', '')[:70]}'\n"
-                f"   Use a DIFFERENT subject format — don't repeat the same structure.\n"
+                f"  → variant_a MUST follow this exact formula. Only change the wording slightly.\n"
             )
 
-        prompt = f"""You are an expert email copywriter for SuperBFSI, an Indian BFSI company.
+        optimizer_block = ""
+        if iteration > 1 and (opt_subject or opt_content):
+            optimizer_block = (
+                f"\n\U000026A0 OPTIMIZER DIRECTIVES (from previous iteration analysis):\n"
+                f"  Subject format: {opt_subject}\n"
+                f"  Body changes: {opt_content}\n"
+                f"  Apply these — they are based on real click data.\n"
+            )
+
+        strategy_block = ""
+        if strategy_notes:
+            strategy_block = (
+                f"\n\U0001F4CB VARIANT EXECUTION NOTES (hard requirements from strategist):\n"
+                f"  {strategy_notes}\n"
+                f"  Follow these notes exactly.\n"
+            )
+
+        winning_block = ""
+        if winning_variant and winning_variant.get("tone") and iteration >= 2:
+            winning_tone  = winning_variant["tone"]
+            winning_click = winning_variant.get("click_rate", 0)
+            if tone == winning_tone:
+                winning_block = (
+                    f"\n\U0001F512 TONE LOCK: '{winning_tone}' achieved {winning_click:.1%} click rate. "
+                    f"This variant MUST use tone: '{winning_tone}'. Do NOT deviate.\n"
+                )
+            else:
+                winning_block = (
+                    f"\n\U0001F9EA CHALLENGER TONE: the previous winning tone was '{winning_tone}', "
+                    f"but this variant MUST stay in the alternate tone '{tone}' for learning. "
+                    f"Do NOT drift back to the winning tone.\n"
+                )
+
+        seed_block = ""
+        seed = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
+        seed_block = (
+            f"\nSeed template (improve on this — do NOT copy verbatim):\n"
+            f"  Subject: {seed['subject']}\n"
+        )
+
+        # ── Build prompt ──────────────────────────────────────────────────────
+        prompt = f"""You are an expert email copywriter for SuperBFSI's XDeposit campaign.
 
 Campaign Brief: {brief}
 
-Product: XDeposit Term Deposit
-- 1 percentage point HIGHER returns than ALL competitors
-- EXTRA 0.25 percentage point EXCLUSIVELY for female senior citizens
-- CTA URL (only allowed URL): {XDEPOSIT_URL}
-{optimizer_directives_block}
+Product:
+- XDeposit gives 1 percentage point HIGHER returns than ALL competitors
+- Female senior citizens get EXTRA 0.25 percentage point on top
+- CTA URL (the ONLY URL allowed): {XDEPOSIT_URL}
+
 Target Segments:
-{chr(10).join(seg_descriptions)}
+{chr(10).join(seg_descriptions) if seg_descriptions else "General cohort"}
 {special_offer_block}
 {occupation_block}
-{seed_block}
 {thompson_block}
+{optimizer_block}
+{strategy_block}
+{winning_block}
+{seed_block}
 
 Variant Style:
 - Tone: {tone}
 - Include emojis: {include_emoji}
-- Rejection feedback: {rejection_reason or 'None'}
-- BANNED: urgency, scarcity, FOMO — the API penalises this
-- Preferred tones: trust-building, aspirational, informational, warm/personal
+- Rejection feedback to address: {rejection_reason or 'None'}
 
 {dna_rules if dna_rules else ''}
 
@@ -231,31 +254,32 @@ STRICT EMAIL RULES:
   3. One trust/reassurance sentence
   4. Bare CTA URL on the final line
 
-Return ONLY valid JSON (no markdown, no backticks):
-{{"subject": "Your subject here", "body": "Your body here"}}"""
+Return ONLY valid JSON — no markdown, no backticks, no explanation:
+{{"subject": "your subject here", "body": "your body here"}}"""
 
-        raw = ""
+        # ── Call LLM ──────────────────────────────────────────────────────────
         try:
-            prompt  = strip_invalid_unicode(prompt)
             raw     = await invoke_with_retry(llm, prompt)
-            raw     = strip_invalid_unicode(str(raw))
-            content = json.loads(clean_llm_json(raw), strict=False)
-            subject = strip_invalid_unicode(str(content.get("subject", "")))[:200]
-            body    = strip_invalid_unicode(str(content.get("body", "")))[:5000]
+            parsed  = json.loads(clean_llm_json(raw), strict=False)
+            subject = str(parsed.get("subject", "")).strip()[:200]
+            body    = str(parsed.get("body", "")).strip()[:5000]
 
-            # Enforce CTA presence
+            if not subject or not body:
+                raise ValueError("LLM returned empty subject or body")
+
+            # Ensure CTA is present
             if include_url and XDEPOSIT_URL not in body:
-                body += f"\n\n👉 Explore XDeposit now: {XDEPOSIT_URL}"
+                body += f"\n\n\U0001F449 {XDEPOSIT_URL}"
 
             await emit(campaign_id, "content_gen", "agent_thought",
-                       f"✅ {variant_id}: '{subject[:60]}...'")
+                       f"✅ {variant_id}: '{subject[:70]}'")
 
         except Exception as e:
             await emit(campaign_id, "content_gen", "agent_thought",
-                       f"⚠️  Content fallback for {variant_id}: {repr(e)} | RAW: {repr(strip_invalid_unicode(raw[:300]))}")
-            tmpl   = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
-            subject = strip_invalid_unicode(str(tmpl["subject"]))
-            body    = strip_invalid_unicode(str(tmpl["body"]))
+                       f"⚠️ LLM failed for {variant_id} ({str(e)[:100]}). Using fallback.")
+            tmpl    = FALLBACK_TEMPLATES[0] if has_special_offer else random.choice(FALLBACK_TEMPLATES)
+            subject = tmpl["subject"]
+            body    = tmpl["body"]
 
         emails.append({
             "variant":      variant_id,
@@ -264,15 +288,15 @@ Return ONLY valid JSON (no markdown, no backticks):
             "customer_ids": customer_ids,
             "send_time":    send_time,
             "tone":         tone,
+            "strategy_notes": strategy_notes,
             "segment_ids":  segment_ids,
         })
 
     if not emails:
         await emit(campaign_id, "content_gen", "agent_thought",
-                   "❌ No emails generated. Check strategy variants.")
-
-    await emit(campaign_id, "content_gen", "agent_thought",
-               f"✅ Generated {len(emails)} email variants.")
+                   "❌ No emails generated.")
+    else:
+        await emit(campaign_id, "content_gen", "agent_thought",
+                   f"✅ Generated {len(emails)} email variants.")
 
     return {"emails": emails, "status": "content_ready"}
-

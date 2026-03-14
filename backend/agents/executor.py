@@ -105,7 +105,12 @@ async def executor_node(state: CampaignState) -> dict:
             await emit(campaign_id, "executor", "agent_thought",
                        f"⚠️  Send issue for {variant}: {result['error']}")
         else:
-            ext_id = result.get("campaign_id", "")
+            ext_id = str(result.get("campaign_id", "")).strip()
+            if not ext_id:
+                await emit(campaign_id, "executor", "agent_thought",
+                           f"⚠️  {variant} returned no external campaign ID — skipping report tracking.")
+                continue
+            email["external_campaign_id"] = ext_id
             external_campaign_ids.append(ext_id)
             new_emailed.update(customer_ids)
             record_customers_emailed(campaign_id, customer_ids, iteration)
@@ -134,6 +139,7 @@ async def executor_node(state: CampaignState) -> dict:
                f"Handing off to monitor...")
 
     return {
+        "emails":                    emails,
         "external_campaign_ids":    external_campaign_ids,
         "all_emailed_customer_ids": all_emailed_updated,
         "status":                   "running",

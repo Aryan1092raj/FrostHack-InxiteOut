@@ -13,11 +13,18 @@ async def monitor_node(state: CampaignState) -> dict:
     await emit(campaign_id, "monitor", "agent_thought",
                f"Fetching performance reports for {len(external_campaign_ids)} campaigns...")
 
-    # Build lookup: external_id → email details (emails[i] ↔ external_campaign_ids[i])
+    # Build lookup: external_id → email details.
+    # Prefer the explicit mapping stamped by executor; fall back to index order
+    # only for older in-flight states that predate that field.
     email_by_ext_id: dict = {}
-    for i, ext_id in enumerate(external_campaign_ids):
-        if i < len(state.get("emails", [])):
-            email_by_ext_id[ext_id] = state["emails"][i]
+    for email in state.get("emails", []):
+        ext_id = str(email.get("external_campaign_id", "")).strip()
+        if ext_id:
+            email_by_ext_id[ext_id] = email
+    if not email_by_ext_id:
+        for i, ext_id in enumerate(external_campaign_ids):
+            if i < len(state.get("emails", [])):
+                email_by_ext_id[ext_id] = state["emails"][i]
 
     # Small wait to allow gamified metrics to register
     await asyncio.sleep(2)
@@ -61,8 +68,11 @@ async def monitor_node(state: CampaignState) -> dict:
             "open_rate": open_rate,
             "click_rate": click_rate,
             "total_sent": total,
+            "opens": opens,
+            "clicks": clicks,
             "subject": email_info.get("subject", ""),
             "tone": email_info.get("tone", ""),
+            "variant": email_info.get("variant", ""),
             "customer_ids": email_info.get("customer_ids", []),
         })
 
@@ -116,6 +126,8 @@ Overall Cumulative Metrics (across all {iteration} iteration(s)):
 
 Current Iteration Metrics:
 - Sent this iteration: {current_metrics['total_sent']}
+- Open rate this iteration: {round(current_metrics['opens'] / current_metrics['total_sent'], 4) if current_metrics['total_sent'] else 0:.1%}
+- Click rate this iteration: {round(current_metrics['clicks'] / current_metrics['total_sent'], 4) if current_metrics['total_sent'] else 0:.1%}
 
 Per-Campaign Breakdown (this iteration):
 {per_campaign_for_analysis}
