@@ -135,6 +135,10 @@ async def probe_executor_node(state: CampaignState) -> dict:
     brief        = state["brief"]
     iteration    = state.get("iteration", 1)
     all_emailed  = set(state.get("all_emailed_customer_ids", []))
+    all_converted = set(state.get("all_converted_customer_ids", []))
+    underperforming_ids = state.get("underperforming_customer_ids", [])
+    opened_not_clicked_ids = state.get("opened_not_clicked_customer_ids", [])
+    never_opened_ids = state.get("never_opened_customer_ids", [])
 
     # ── Default fallback ───────────────────────────────────────────────────────
     all_ids   = [c["customer_id"] for c in customers]
@@ -160,10 +164,30 @@ async def probe_executor_node(state: CampaignState) -> dict:
 
     # ── Skip on rescue iterations ──────────────────────────────────────────────
     if iteration > 1:
+        rescue_pool: list[str] = []
+        if opened_not_clicked_ids or never_opened_ids:
+            rescue_pool = [
+                cid for cid in list(opened_not_clicked_ids) + list(never_opened_ids)
+                if cid not in all_converted
+            ]
+        elif underperforming_ids:
+            rescue_pool = [cid for cid in underperforming_ids if cid not in all_converted]
+        else:
+            rescue_pool = [cid for cid in available if cid not in all_converted]
+
+        # Preserve order while deduplicating so downstream fallback logic can
+        # reuse the exact rescue cohort if any later node needs it.
+        deduped_rescue_pool = list(dict.fromkeys(rescue_pool))
+
         await emit(campaign_id, "probe_executor", "agent_thought",
                    f"⏭️  Iteration {iteration}: probe phase already done. "
-                   f"Using learned DNA signal from iteration 1.")
-        return {"status": "probe_skipped"}
+                   f"Using learned DNA signal from iteration 1. "
+                   f"Passing through {len(deduped_rescue_pool)} rescue-pool customers.")
+        return {
+            "status": "probe_skipped",
+            "main_pool_customer_ids": deduped_rescue_pool,
+            "all_emailed_customer_ids": list(all_emailed),
+        }
 
     # ── Guard: need customers ──────────────────────────────────────────────────
     if not customers:

@@ -6,14 +6,14 @@
 
 ## What It Does
 
-CampaignX autonomously runs email campaigns for SuperBFSI's XDeposit term deposit product. A 7-node LangGraph pipeline handles customer segmentation, A/B strategy planning, content generation, campaign execution, performance monitoring, and optimization — with human approval before every send.
+CampaignX autonomously runs email campaigns for SuperBFSI's XDeposit term deposit product. An 8-node LangGraph pipeline handles customer segmentation, A/B strategy planning, content generation, probe-based winner selection, campaign execution, performance monitoring, and optimization — with human approval before every send.
 
 ## Architecture
 
 ```
-Profiler → Strategist → Content Gen → Human Approval → Executor → Monitor → Optimizer
-               ↑           [reject] ←──┘                                       ↓
-               └────────────────────── [re-optimize] ←──────────────────────────┘
+Profiler → Strategist → Content Gen → Human Approval → Probe Executor → Executor → Monitor → Optimizer
+               ↑           [reject] ←──┘                                                         ↓
+               └──────────────────────────── [re-optimize] ←──────────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -29,13 +29,14 @@ Profiler → Strategist → Content Gen → Human Approval → Executor → Moni
 
 ## Agent Pipeline
 
-1. **Profiler** — Fetches 5000 customers from CampaignX API, LLM creates 3–5 demographic segments
+1. **Profiler** — Fetches the full customer cohort from the CampaignX API, LLM creates 3–5 demographic segments
 2. **Strategist** — Designs 2 A/B variants with different tones, send times, and segment targeting
 3. **Content Gen** — LLM writes email subject + body per variant (enforces API format rules)
 4. **Human Approval** — Pipeline blocks until marketer approves or rejects (rejection feeds back to strategist)
-5. **Executor** — Sends campaigns via CampaignX send_campaign API
-6. **Monitor** — Fetches reports, computes open/click rates, LLM analyzes performance
-7. **Optimizer** — Evaluates metrics vs targets (click ≥50%, open ≥40%), loops back for up to 3 iterations
+5. **Probe Executor** — Tests micro-variants on a small probe pool and picks a winner with Thompson sampling
+6. **Executor** — Sends campaigns via CampaignX send_campaign API
+7. **Monitor** — Fetches reports, computes open/click rates, LLM analyzes performance
+8. **Optimizer** — Evaluates results and loops back for rescue iterations up to the configured cap
 
 ## Key Features
 
