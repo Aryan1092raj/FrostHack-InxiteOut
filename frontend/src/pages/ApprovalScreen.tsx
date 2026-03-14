@@ -24,7 +24,7 @@ export default function ApprovalScreen() {
 
   const emails: any[] = campaign.emails || []
   const strategy = campaign.strategy || {}
-  const segments: any[] = strategy.segments || []
+  const segments: any[] = strategy.segments || campaign.segments || []
   const totalCustomers = emails.reduce((s: number, e: any) => s + (e.customer_ids?.length || 0), 0)
 
   const handleApprove = async () => {

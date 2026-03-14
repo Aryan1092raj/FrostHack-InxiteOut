@@ -26,7 +26,12 @@ async def human_approval_node(state: CampaignState) -> dict:
     campaign_id = state["campaign_id"]
 
     if state.get("strategy"):
-        update_campaign_strategy(campaign_id, state["strategy"])
+        strategy_to_save = dict(state["strategy"])
+        # Persist profiler segments with the strategy so approval/reports pages
+        # can render segment targeting and segment-level metrics later.
+        if state.get("segments"):
+            strategy_to_save["segments"] = state["segments"]
+        update_campaign_strategy(campaign_id, strategy_to_save)
     if state.get("emails"):
         update_campaign_emails(campaign_id, state["emails"])
 

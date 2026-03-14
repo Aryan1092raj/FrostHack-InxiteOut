@@ -69,8 +69,9 @@ export default function Reports() {
     return Array.from(byCustomer.values())
   })()
   const rawCustomerIds = new Set(rawData.map(row => row.customer_id).filter(Boolean))
-  const segments: any[] = campaign.strategy?.segments || []
+  const segments: any[] = campaign.strategy?.segments || campaign.segments || []
   const emails: any[] = campaign.emails || []
+  const missingSavedSegments = segments.length === 0 && emails.length > 0 && reports.length > 0
 
   // ── FIX: Build historyData grouped by iteration_number ────────────────────
   // OLD: hardcoded `i += 2` assumed exactly 2 variants per cycle — breaks with
@@ -331,7 +332,9 @@ export default function Reports() {
               </ResponsiveContainer>
             ) : (
               <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--t3)", fontSize: "0.83rem", fontStyle: "italic" }}>
-                Segment data will appear after campaign execution
+                {missingSavedSegments
+                  ? "Segment metadata was not saved for this campaign. New campaigns after this fix will show segment breakdowns."
+                  : "Segment data will appear after campaign execution"}
               </div>
             )}
           </div>
