@@ -47,7 +47,28 @@ export default function Reports() {
   )
 
   const latestReport = reports[reports.length - 1]
-  const rawData: any[] = latestReport?.raw_report?.data || []
+  const rawData: any[] = (() => {
+    const byCustomer = new Map<string, any>()
+
+    for (const report of reports) {
+      for (const row of (report?.raw_report?.data || [])) {
+        const customerId = row?.customer_id
+        if (!customerId) continue
+
+        const existing = byCustomer.get(customerId)
+        if (!existing) {
+          byCustomer.set(customerId, { ...row })
+          continue
+        }
+
+        if (row.EO === "Y") existing.EO = "Y"
+        if (row.EC === "Y") existing.EC = "Y"
+      }
+    }
+
+    return Array.from(byCustomer.values())
+  })()
+  const rawCustomerIds = new Set(rawData.map(row => row.customer_id).filter(Boolean))
   const segments: any[] = campaign.strategy?.segments || []
   const emails: any[] = campaign.emails || []
 
@@ -112,10 +133,11 @@ export default function Reports() {
     const total = rows.length || 1
     return {
       segment: seg.name?.split(" ").slice(0, 2).join(" ") || "Seg",
+      customer_ids: seg.customer_ids || [],
       "Open Rate": Math.round(rows.filter(r => r.EO === "Y").length / total * 100),
       "Click Rate": Math.round(rows.filter(r => r.EC === "Y").length / total * 100),
     }
-  }).filter(s => s["Open Rate"] > 0 || s["Click Rate"] > 0)
+  }).filter(s => s.customer_ids.some((customerId: string) => rawCustomerIds.has(customerId)))
 
   // A/B data
   const abData = emails.map((email: any) => {
