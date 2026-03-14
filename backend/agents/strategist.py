@@ -53,6 +53,9 @@ async def strategist_node(state: CampaignState) -> dict:
             f"Only vary: subject line wording. Everything else stays.\n"
             f"{'='*60}\n"
         )
+        await emit(campaign_id, "strategist", "agent_thought",
+                   f"🔒 Tone lock active: '{winning_variant_info.get('tone', '')}' "
+                   f"for both variants (iteration {iteration})")
 
     if is_rescue:
         await emit(campaign_id, "strategist", "agent_thought",
